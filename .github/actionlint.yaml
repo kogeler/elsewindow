@@ -1,0 +1,5 @@
+# Treat the official Ubuntu 26.04 x64 and Arm64 labels as valid.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm

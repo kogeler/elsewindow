@@ -1,0 +1,46 @@
+# Disposable Debian client for the remote Xpra SSH lifecycle test.
+
+FROM docker.io/library/python:3.13-slim@sha256:8fef26df932191825664e4957ff488c96dfe64918327634a357a55facbc994d3 AS xpra-client
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+	PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN useradd --create-home --uid 1000 --shell /bin/bash box \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        --no-install-recommends \
+        openssh-client \
+        procps \
+        tini \
+        python3-opengl \
+        x11-utils \
+        xauth \
+        xfonts-base \
+        xvfb \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN python -m pip install --quiet --require-hashes \
+        --only-binary=:all: --requirement /tmp/requirements.txt \
+    && python -m pip check \
+    && rm -f /tmp/requirements.txt
+
+COPY tools/container_payload.py /usr/local/libexec/container-payload
+COPY containers/toolbox/entrypoint.sh /usr/local/sbin/toolbox-entrypoint
+COPY --chmod=0700 \
+    containers/xpra/install-release.py \
+    tools/install_xpra_release.py \
+    /usr/local/libexec/
+COPY --chmod=0600 \
+    xpra-release/release.json \
+    xpra-release/archive.tar \
+    /tmp/xpra-release/
+RUN chmod 0755 /usr/local/libexec/container-payload \
+        /usr/local/sbin/toolbox-entrypoint \
+    && /usr/bin/python3 /usr/local/libexec/install-release.py \
+    && rm -f /usr/local/libexec/install-release.py
+
+USER box
+WORKDIR /work
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/sbin/toolbox-entrypoint"]

@@ -1,0 +1,17 @@
+include .version
+include CHANGELOG.md
+include LICENSE
+include MANIFEST.in
+include README.md
+include pyproject.toml
+recursive-include elsewindow *.py *.yml py.typed
+prune .github
+prune bin
+prune containers
+prune doc
+prune tests
+prune tmp
+prune tools
+global-exclude .DS_Store
+global-exclude *.py[cod]
+global-exclude __pycache__

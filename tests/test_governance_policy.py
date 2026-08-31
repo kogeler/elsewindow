@@ -1,0 +1,271 @@
+"""Independent dependency, release, and workflow governance contracts."""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github/workflows"
+ACTION = re.compile(
+    r"^\s*uses:\s*([^@\s]+)@([0-9a-f]{40})\s+#\s+(v[0-9][^\s]*)$",
+    re.MULTILINE,
+)
+
+
+def test_governance_files_are_project_local_and_complete() -> None:
+    assert {path.name for path in WORKFLOWS.glob("*.yml")} == {
+        "ci.yml",
+        "dependency-submission.yml",
+        "pages.yml",
+        "release.yml",
+    }
+    for name in (
+        "CI.md",
+        "COMPATIBILITY_SECURITY.md",
+        "DEPENDENCIES.md",
+        "DEVELOPMENT.md",
+        "RELEASES.md",
+    ):
+        assert (ROOT / "doc/maintenance" / name).is_file()
+    for name in (
+        "dependency_audit.py",
+        "dependency_snapshot.py",
+        "lock_validation.py",
+        "release_inventory.py",
+        "verify_pypi_release.py",
+        "version.py",
+    ):
+        assert (ROOT / ".github/scripts" / name).is_file()
+
+
+def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        content = path.read_text(encoding="utf-8")
+        assert "DOR" + "MANT" not in content
+        assert "working-" + "directory:" not in content
+        assert "../" not in content
+        external = [
+            line
+            for line in content.splitlines()
+            if "uses:" in line and "uses: ./" not in line
+        ]
+        assert len(ACTION.findall(content)) == len(external), path
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    assert "workflow_call:" in ci
+    assert "run: make live-test" in ci
+    assert ci.count("security-events: write") == 1
+    assert "repository:" not in ci
+    assert "ubuntu-26.04-arm" in ci
+    assert 'python-version: "3.13"' not in ci
+    assert "${{ matrix.python }}" in ci
+    assert "Exact version progression" in ci
+    assert "unpublished_base_version" in ci
+    assert "standalone-amd64" not in ci
+    assert "standalone-${{ matrix.architecture }}" in ci
+    assert "persist-credentials: false" in ci
+    submission = (WORKFLOWS / "dependency-submission.yml").read_text(encoding="utf-8")
+    assert submission.count("contents: write") == 1
+    assert "pull_request:" not in submission
+    pages = (WORKFLOWS / "pages.yml").read_text(encoding="utf-8")
+    assert pages.count("pages: write") == 1
+    assert pages.count("id-token: write") == 1
+    assert "make docs-audit SYSTEM_PYTHON=python" in pages
+    assert "actions/upload-pages-artifact@" in pages
+    assert "actions/deploy-pages@" in pages
+    assert "if: github.event_name == 'push'" in pages
+    release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    assert release.count("contents: write") == 1
+    assert release.count("id-token: write") == 1
+    assert "uses: ./.github/workflows/ci.yml" in release
+    assert "base_ref: ${{ github.event.before }}" in release
+    assert "pypa/gh-action-pypi-publish@" in release
+    assert "skip-existing" not in release
+    assert "password:" not in release
+    assert "v${version}" in release
+    assert "elsewindow-linux-amd64" in release
+    assert "elsewindow-linux-arm64" in release
+    assert "SHA256SUMS.txt" in release
+
+
+def test_make_exposes_the_complete_governance_surface() -> None:
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    for target in (
+        "lock",
+        "build",
+        "refresh-dependencies",
+        "freeze-check",
+        "audit",
+        "licenses",
+        "outdated",
+        "dependency-snapshot",
+        "docs-build",
+        "docs-audit",
+        "docs-serve",
+        "package",
+        "standalone",
+        "smoke",
+        "reproducibility",
+        "checksums",
+        "release-notes",
+        "compatibility-python",
+        "validate-actions",
+        "test-network-block",
+        "confinement-test",
+        "coverage-report",
+        "check",
+        "ci",
+    ):
+        assert re.search(rf"^{re.escape(target)}:", makefile, re.MULTILINE), target
+    assert makefile.count("--userns=auto:size=2048") == 3
+    assert "tools/build_distributions.py" in makefile
+    assert "tools/verify_distribution.py" in makefile
+    assert "tools/build_standalone.py" in makefile
+    assert "tools/verify_standalone.py" in makefile
+    assert "--find-links" not in makefile
+    assert "--rebuild" in makefile
+    assert "pip download --quiet --require-hashes" in makefile
+    assert "import importlib.metadata, ssh_wrapper" in makefile
+    assert "import importlib.metadata, pip, ssh_wrapper" in makefile
+    assert "override NORMALIZATION_EPOCH := 315532800" in makefile
+    assert "git log" not in makefile
+    assert "git ls-files" not in (ROOT / "tools/create_live_payload.py").read_text(
+        encoding="utf-8"
+    )
+    assert "--volume" not in makefile
+    assert "podman" + " cp" not in makefile.lower()
+    audit = (ROOT / ".github/scripts/dependency_audit.py").read_text(encoding="utf-8")
+    for lock in (
+        "requirements.txt",
+        "requirements-quality.txt",
+        "requirements-test.txt",
+        "requirements-package.txt",
+        "requirements-standalone.txt",
+        "requirements-docs.txt",
+    ):
+        assert lock in audit
+    assert '"--disable-pip"' in audit
+    assert '"--requirement"' in audit
+
+
+def test_python_313_and_314_are_both_enforced_by_metadata_and_ci() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    governance = (ROOT / "containers/governance/Containerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert project["project"]["requires-python"] == ">=3.13,<3.15"
+    assert project["tool"]["mypy"]["python_version"] == "3.13"
+    assert workflow.count('python-version: "3.14"') >= 4
+    assert '- "3.13"' in workflow
+    assert '- "3.14"' in workflow
+    assert "CPython ${{ matrix.python }} unit and policy suite" in workflow
+    assert "make test SYSTEM_PYTHON=python" in workflow
+    assert re.search(
+        r"^ci:\s+check freeze-check audit compatibility-python$",
+        makefile,
+        re.MULTILINE,
+    )
+    assert "python313" in makefile
+    assert governance.count("python:3.13-slim@sha256:") >= 2
+
+
+def test_current_locks_and_versions_validate_with_stdlib_helpers(
+    tmp_path: Path,
+) -> None:
+    for helper in ("lock_validation.py", "version.py"):
+        arguments = [sys.executable, str(ROOT / ".github/scripts" / helper)]
+        if helper == "version.py":
+            arguments.append("check")
+        completed = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+    output = tmp_path / "snapshot.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / ".github/scripts/dependency_snapshot.py"),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert set(json.loads(output.read_text(encoding="utf-8"))["manifests"]) == {
+        "requirements.txt",
+        "requirements-docs.txt",
+        "requirements-package.txt",
+        "requirements-quality.txt",
+        "requirements-standalone.txt",
+        "requirements-test.txt",
+    }
+
+
+def test_audit_starts_with_no_reviewed_exceptions() -> None:
+    exceptions = json.loads(
+        (ROOT / ".github/dependency-audit-exceptions.json").read_text(encoding="utf-8")
+    )
+    assert exceptions == {"exceptions": []}
+
+
+def test_dependency_audiences_have_exact_direct_owners() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    audiences = project["project"]["optional-dependencies"]
+    assert set(audiences) == {"quality", "test", "package", "standalone", "docs"}
+    flattened = [requirement for values in audiences.values() for requirement in values]
+    assert len(flattened) == len(set(flattened))
+    assert "ruff==0.16.3" in audiences["quality"]
+    assert "pytest==9.1.1" in audiences["test"]
+    assert "build==1.5.0" in audiences["package"]
+    assert "setuptools==84.0.0" in audiences["package"]
+    assert "wheel==0.48.0" in audiences["package"]
+    assert audiences["standalone"] == ["pyinstaller==6.22.2"]
+    assert audiences["docs"] == ["mkdocs-material==9.7.7"]
+
+
+def test_distribution_contract_includes_runtime_yaml_and_console_entry() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["scripts"] == {"elsewindow": "elsewindow.cli:main"}
+    assert project["tool"]["setuptools"]["package-data"] == {
+        "elsewindow": ["live-cli.yml", "profiles.yml", "py.typed"]
+    }
+    verifier = (ROOT / "tools/verify_distribution.py").read_text(encoding="utf-8")
+    smoke = (ROOT / "tools/smoke_distribution.py").read_text(encoding="utf-8")
+    for required in ("live-cli.yml", "profiles.yml", "py.typed", "RECORD"):
+        assert required in verifier
+    for required in ("--no-index", "--help", "--diagnose", "--strict"):
+        assert required in smoke
+
+
+def test_parallel_coverage_state_is_confined_to_artifacts() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["tool"]["coverage"]["run"]["data_file"] == (".artifacts/.coverage")
+
+
+def test_release_builds_once_and_routes_artifacts_to_exact_destinations() -> None:
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+
+    assert ci.count("make package reproducibility smoke-wheel smoke-sdist") == 1
+    assert ci.count("make standalone smoke-standalone") == 1
+    assert ci.count("actions/upload-artifact@") == 2
+    assert release.count("actions/download-artifact@") == 4
+    assert "make package" not in release
+    assert "make standalone" not in release
+    pypi_section = release.split("publish-pypi:", 1)[1].split("publish-github:", 1)[0]
+    assert "standalone-" not in pypi_section
+    assert "packages-dir: dist" in pypi_section

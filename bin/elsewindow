@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repository_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+venv_dir="${repository_dir}/venv-runtime"
+venv_python="${venv_dir}/bin/python"
+requirements_file="${repository_dir}/requirements.txt"
+requirements_state="${venv_dir}/.requirements.txt"
+module_entry="${repository_dir}/elsewindow/__main__.py"
+
+if [[ ! -f "${requirements_file}" ]]; then
+    printf 'Requirements file is missing: %s\n' "${requirements_file}" >&2
+    exit 1
+fi
+if [[ ! -f "${module_entry}" ]]; then
+    printf 'Module entry point is missing: %s\n' "${module_entry}" >&2
+    exit 1
+fi
+if [[ ! -x "${venv_python}" ]]; then
+    printf 'Runtime environment is not installed; run: make runtime-venv\n' >&2
+    exit 1
+fi
+if [[ ! -f "${requirements_state}" ]] ||
+    ! cmp -s "${requirements_file}" "${requirements_state}"; then
+    printf 'Runtime environment is stale; run: make runtime-venv\n' >&2
+    exit 1
+fi
+if ! PYTHONPATH="${repository_dir}" \
+    "${venv_python}" -c 'import elsewindow' >/dev/null 2>&1; then
+    printf 'Elsewindow source is invalid; run: make runtime-venv\n' >&2
+    exit 1
+fi
+if ! PYTHONPATH="${repository_dir}" \
+    "${venv_python}" -c 'import ssh_wrapper' >/dev/null 2>&1; then
+    printf 'Installed ssh-wrapper package is invalid; run: make runtime-venv\n' >&2
+    exit 1
+fi
+
+PYTHONPATH="${repository_dir}" exec "${venv_python}" -m elsewindow "$@"

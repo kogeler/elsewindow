@@ -1,0 +1,49 @@
+# Copyright (c) 2026 kogeler
+# SPDX-License-Identifier: MIT
+
+version: 2
+updates:
+  # The manifests own direct versions and pip-compile owns the generated locks.
+  # Group ordinary updates so one resolver change produces one coherent PR.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      runtime:
+        patterns:
+          - "ssh-wrapper"
+      quality-and-test:
+        patterns:
+          - "bandit"
+          - "mypy"
+          - "pip-audit"
+          - "pip-licenses"
+          - "pytest*"
+          - "ruff"
+      packaging:
+        patterns:
+          - "build"
+          - "pyinstaller"
+          - "setuptools"
+          - "wheel"
+      documentation:
+        patterns:
+          - "mkdocs-material"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

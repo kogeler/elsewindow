@@ -1,0 +1,120 @@
+# Elsewindow Agent Guide
+
+Elsewindow is an independently buildable and releasable Linux Python project.
+Every maintained input, test, workflow, and artifact owner lives in this
+repository. Resolve every input beneath this root and never import another
+application's source tree.
+
+## Project map
+
+- `README.md` is the public overview and documentation index. `mkdocs.yml`,
+  `doc/`, `doc/site/`, and `tools/audit_docs_site.py` own the rendered site and
+  its offline publication audit.
+- `elsewindow/` is the typed installed package. `live-cli.yml` and
+  `profiles.yml` are package data and the sole Xpra option authority.
+- `bin/elsewindow` is the repository launcher; `python -m elsewindow` and the
+  installed console command are the other supported entry routes.
+- `tools/install_xpra_release.py` is the standalone verified Xpra package
+  installer for Debian 13 and Ubuntu 26.04.
+- `tools/prepare_xpra_images.py` prepares release-backed client and target
+  images by immutable ID.
+- `tools/container_payload.py` owns every project container file transfer.
+- `tools/project_tree.py` enumerates maintained current-tree files without Git
+  metadata and is the sole container-context inventory authority.
+- `containers/` contains only Elsewindow's client, target, governance, and
+  installer images.
+- `tests/` contains unit, policy, package, installer, and the single automatic
+  ephemeral-key live topology.
+- `.github/workflows/` contains active root-native CI, documentation,
+  dependency submission, and release automation.
+- `.github/scripts/` owns standard-library dependency, version, and release
+  policy. `doc/maintenance/` owns maintainer procedures.
+- `.version` is the only human-maintained version. Dynamic package metadata,
+  `elsewindow.__version__`, the changelog section, `vX.Y.Z` tag, release name,
+  and notes must resolve from it.
+- Generated hash locks install the exact published `ssh-wrapper==0.1.0` wheel
+  from PyPI. Never hand-edit a lock.
+
+## Required runtime contracts
+
+- Perform one deliberate OpenSSH authentication and use only channels backed
+  by the owned master. Never reconnect after master loss.
+- Open no forwarding or Xpra TCP listener. Disable automatic reconnection and
+  auxiliary Xpra data and device features.
+- Start the remote server and application in one heartbeat-supervised process
+  group. Cleanup targets only recorded owned resources.
+- Before changing an Xpra argument, compare `elsewindow/live-cli.yml` and
+  `elsewindow/profiles.yml` byte-for-byte with the current canonical files in
+  `kogeler/xpra:develop/fork-maintenance/`.
+- Do not duplicate YAML option or numeric values in Python or tests. Route all
+  applicable Xpra version, information, and detach commands through the shared
+  YAML command assembler.
+- Keep package installation separate from startup. Launchers never modify
+  system packages and replace inherited `PYTHONPATH` so owned source and the
+  prepared PyPI dependency cannot be shadowed.
+- Import `ssh_wrapper` only from the prepared environment. Do not vendor it,
+  add another import path, or build a replacement wheel here.
+- Treat the maintained Xpra fork release and its live matrices as the authority
+  for codec, rendering, application, and downstream-patch correctness. This
+  project tests public commands, package provenance, profile assembly, and its
+  SSH-owned lifecycle without internal Xpra probes or patch identifiers.
+
+## Installer and container contracts
+
+- The Xpra installer rejects unsupported operating systems, releases, and
+  architectures before network access. Existing Xpra inventory requires an
+  exact interactive `y` or `yes`, read from `/dev/tty` when available.
+- Non-root installation invokes `/usr/bin/sudo`, copies validated inputs into
+  a root-owned mode-`0700` stage, revalidates immutable copies and inventory,
+  and purges only the confirmed set immediately before the APT transaction.
+- Package selection is the symmetric consumed dependency closure. Validate the
+  native libva encoder and decoder, libyuv, GTK OpenGL, common/server assets,
+  X11 bindings, and Ubuntu Wayland modules in their owning DEBs. Install exact
+  local DEBs with `libva-drm2` and `python3-opengl` through APT. Never use
+  `dpkg -i`, `autoremove`, or an added Xpra APT source.
+- Every project-owned Podman transfer uses the bounded payload pipe. Do not add
+  bind mounts, named data volumes, or `podman cp`.
+- Every rootless runtime container that consumes subordinate IDs declares a
+  bounded `--userns=auto:size=...` range. Never use unbounded `auto`, `keep-id`,
+  `nomap`, or `--userns=host`.
+- The disposable Ubuntu SSH target assigns the `sshd` privilege-separation
+  account to its dedicated low-ID `_ssh` group so its 2,048-ID namespace is
+  sufficient; do not restore the legacy GID 65534 or widen the namespace.
+- The live harness has one automatic route using both immutable release-backed
+  images, the production profile assembler, and a newly generated Ed25519 key.
+
+## Change and validation workflow
+
+Keep repository-owned text in English and internal documentation links
+relative. Update implementation, focused tests, and the owning user,
+architecture, security, development, or maintenance documentation together.
+Run the smallest real test immediately after each atomic change.
+
+Every local gate reads the current filesystem bytes, including modified and
+untracked maintained files. Never select inputs from the Git index, require a
+commit, derive normalization from commit metadata, or persist a successful
+gate result as authority for a later run. Dependency environments may cache
+installed tools only when their complete current lock is revalidated before
+use. When the operator supplies a local reference checkout, inspect that
+checkout directly and do not substitute an internet copy.
+
+```bash
+make format
+make check
+make docs-audit
+make package
+make standalone
+make smoke
+make live-preflight
+make live-test
+```
+
+`make ci` adds online lock re-resolution, audit, and CPython 3.13
+compatibility. Run
+`make runtime-venv` before the repository launcher. Run destructive installer
+acceptance only through `make xpra-installer-test`; it uses disposable
+containers and never changes host package inventory.
+
+Use `apply_patch` for source edits and preserve unrelated work. Never create a
+commit unless the user explicitly requests one in the current conversation.
+Never push.

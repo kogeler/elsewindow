@@ -1,0 +1,21 @@
+# Elsewindow
+
+Canonical documentation: https://kogeler.github.io/elsewindow/
+Source: https://github.com/kogeler/elsewindow
+
+Elsewindow runs one remote Linux GUI application through Xpra over one owned
+OpenSSH ControlMaster. It supports CPython 3.13 and 3.14 on Linux.
+
+Documentation routes:
+- /elsewindow/
+- /elsewindow/getting-started/
+- /elsewindow/xpra/
+- /elsewindow/security/
+- /elsewindow/architecture/
+- /elsewindow/development/
+- /elsewindow/contributing/
+- /elsewindow/maintenance/DEVELOPMENT/
+- /elsewindow/maintenance/DEPENDENCIES/
+- /elsewindow/maintenance/CI/
+- /elsewindow/maintenance/COMPATIBILITY_SECURITY/
+- /elsewindow/maintenance/RELEASES/

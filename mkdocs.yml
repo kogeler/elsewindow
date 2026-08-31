@@ -1,0 +1,79 @@
+site_name: Elsewindow
+site_description: >-
+  Run one remote Linux GUI application through Xpra over one owned OpenSSH
+  master.
+site_url: https://kogeler.github.io/elsewindow/
+site_author: kogeler
+copyright: Copyright 2026 kogeler. MIT licensed.
+
+repo_url: https://github.com/kogeler/elsewindow
+repo_name: kogeler/elsewindow
+edit_uri: edit/main/doc/
+
+docs_dir: doc
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  font: false
+  icon:
+    logo: material/monitor
+    repo: fontawesome/brands/github
+  features:
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - content.action.edit
+    - content.code.copy
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+
+hooks:
+  - doc/site/hooks.py
+
+exclude_docs: |
+  site/hooks.py
+  site/llms.txt
+  site/robots.txt
+  site/__pycache__/**
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kogeler/elsewindow
+      name: Elsewindow on GitHub
+  generator: false
+
+nav:
+  - Home: index.md
+  - Users:
+      - Getting started: getting-started.md
+      - Xpra behavior and profiles: xpra.md
+      - Security model: security.md
+  - Design:
+      - Architecture: architecture.md
+  - Contributors:
+      - Development: development.md
+      - Contributing: contributing.md
+  - Maintainers:
+      - Development contract: maintenance/DEVELOPMENT.md
+      - Dependency contract: maintenance/DEPENDENCIES.md
+      - CI contract: maintenance/CI.md
+      - Compatibility and security: maintenance/COMPATIBILITY_SECURITY.md
+      - Release contract: maintenance/RELEASES.md
+  - Changelog: https://github.com/kogeler/elsewindow/blob/main/CHANGELOG.md

@@ -1,0 +1,37 @@
+# Contributing
+
+Work from this project directory. Keep changes limited to Elsewindow and
+its explicit published dependency contract.
+
+Before submitting a change:
+
+```bash
+make format
+make check
+```
+
+Packaging changes also require `make package reproducibility smoke`.
+Documentation changes require `make docs-audit`. Workflow changes require
+`make validate-actions`. Lifecycle or image changes require
+`make live-preflight` and `make live-test`; installer changes require `make
+xpra-installer-test`.
+
+Changes to package installation or image preparation also require the relevant
+container acceptance target from [Development](development.md). Changes to
+Xpra arguments require a fresh comparison with both canonical fork YAML files
+and tests of the complete assembled argv.
+
+Review for these properties:
+
+- no secondary authentication or reconnect path;
+- no forwarding or Xpra TCP listener;
+- cleanup targets only recorded owned resources;
+- errors remain bounded and path-free;
+- profile values have one YAML authority;
+- package and image operations fail closed before mutation or publication;
+- internal links are relative and repository-owned text is English;
+- no source, test, documentation, or tool from another application project is
+  present.
+
+Do not commit generated caches, environments, image descriptors, package
+archives, credentials, SSH material, or host paths.

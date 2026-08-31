@@ -1,0 +1,314 @@
+# Copyright (c) 2026 kogeler. SPDX-License-Identifier: MIT.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_call:
+    inputs:
+      base_ref:
+        description: Exact base commit for version progression.
+        required: false
+        type: string
+        default: ""
+      upload_release_artifacts:
+        description: Preserve the exact release candidates for a publishing caller.
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: elsewindow-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality, policy, and deterministic package
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements-quality.txt
+            requirements-test.txt
+            requirements-package.txt
+            requirements-docs.txt
+      - name: Verify host boundary
+        run: make doctor
+      - name: Run the complete local gate
+        run: make check
+      - name: Resolve every lock from the current dependency declarations
+        run: make freeze-check
+
+  compatibility:
+    name: CPython ${{ matrix.python }} unit and policy suite
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.13"
+          - "3.14"
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython ${{ matrix.python }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+      - name: Run the complete test suite
+        run: make test SYSTEM_PYTHON=python
+
+  distributions:
+    name: Wheel and sdist clean installation
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements-quality.txt
+            requirements-package.txt
+            requirements.txt
+      - name: Build once and smoke both Python distributions
+        run: make package reproducibility smoke-wheel smoke-sdist SYSTEM_PYTHON=python
+      - name: Preserve exact Python release candidates
+        if: inputs.upload_release_artifacts
+        uses: actions/upload-artifact@043f32080c4e0b0294dd153ee0e9c1c351dc85ec # v7.0.1
+        with:
+          name: python-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  standalone:
+    name: Linux ${{ matrix.architecture }} standalone
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-26.04
+          - architecture: arm64
+            runner: ubuntu-26.04-arm
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-standalone.txt
+      - name: Build and smoke the native executable
+        run: >-
+          make standalone smoke-standalone SYSTEM_PYTHON=python
+          STANDALONE_ARCH=${{ matrix.architecture }}
+      - name: Preserve exact standalone release candidate
+        if: inputs.upload_release_artifacts
+        uses: actions/upload-artifact@043f32080c4e0b0294dd153ee0e9c1c351dc85ec # v7.0.1
+        with:
+          name: standalone-${{ matrix.architecture }}
+          path: dist/elsewindow-linux-${{ matrix.architecture }}
+          if-no-files-found: error
+          retention-days: 1
+
+  dependency-review:
+    name: Dependency review
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          comment-summary-in-pr: never
+          fail-on-severity: moderate
+          license-check: true
+          deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later
+
+  audit:
+    name: Exact-lock vulnerability audit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-quality.txt
+      - name: Enforce reviewed advisory exceptions
+        run: make audit SYSTEM_PYTHON=python
+
+  version:
+    name: Exact version progression
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      BASE_REF: ${{ inputs.base_ref || github.event.pull_request.base.sha || github.event.before }}
+      ZERO_SHA: "0000000000000000000000000000000000000000"
+    steps:
+      - name: Check out proposed revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve exact published and base versions
+        id: baseline
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VERSION_PATH: .version
+        with:
+          script: |
+            const fs = await import("node:fs/promises");
+            const current = (await fs.readFile(process.env.VERSION_PATH, "utf8")).trim();
+            const stable = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+            if (!stable.test(current)) throw new Error(".version is not stable X.Y.Z");
+            let base = "0.0.0";
+            const baseRef = process.env.BASE_REF;
+            if (baseRef && baseRef !== process.env.ZERO_SHA) {
+              const response = await github.rest.repos.getContent({
+                ...context.repo, path: ".version", ref: baseRef,
+              });
+              if (
+                Array.isArray(response.data) || response.data.type !== "file" ||
+                response.data.encoding !== "base64"
+              ) {
+                throw new Error("base .version is not a Base64 repository file");
+              }
+              base = Buffer.from(
+                response.data.content.replace(/\n/g, ""), "base64",
+              ).toString("utf8").trim();
+            }
+            if (!stable.test(base)) throw new Error("base version is not stable X.Y.Z");
+            let unpublished = "";
+            try {
+              await github.rest.repos.getReleaseByTag({
+                ...context.repo, tag: `v${current}`,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              unpublished = "0.0.0";
+              try {
+                const latest = await github.rest.repos.getLatestRelease({ ...context.repo });
+                unpublished = latest.data.tag_name.replace(/^v/, "");
+              } catch (latestError) {
+                if (latestError.status !== 404) throw latestError;
+              }
+              if (!stable.test(unpublished)) {
+                throw new Error("latest release is not a stable vX.Y.Z tag");
+              }
+            }
+            core.setOutput("base_version", base);
+            core.setOutput("unpublished_base_version", unpublished);
+      - name: Compare exact base and proposed versions
+        env:
+          BASE_VERSION: ${{ steps.baseline.outputs.base_version }}
+          UNPUBLISHED_BASE_VERSION: ${{ steps.baseline.outputs.unpublished_base_version }}
+        run: |
+          args="--base-version $BASE_VERSION"
+          if [[ "$(tr -d '\r\n' < .version)" == "$BASE_VERSION" && -n "$UNPUBLISHED_BASE_VERSION" ]]; then
+            args+=" --unpublished-base-version $UNPUBLISHED_BASE_VERSION"
+          fi
+          make version-check SYSTEM_PYTHON=python VERSION_ARGS="$args"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - actions
+          - python
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          languages: ${{ matrix.language }}
+      - name: Analyze
+        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        with:
+          category: /language:${{ matrix.language }}
+
+  installer:
+    name: Debian 13 and Ubuntu 26.04 installer acceptance
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run both disposable installer guests
+        run: make xpra-installer-test
+
+  live:
+    name: Release-backed SSH lifecycle
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Run the packaged-product lifecycle matrix
+        run: make live-test SYSTEM_PYTHON=python

@@ -1,0 +1,35 @@
+# Disposable Ubuntu target for the remote Xpra SSH lifecycle test.
+# The image is built from a checksum-bound package release selected by the
+# project helper. No source tree or host path is mounted into the container.
+
+FROM docker.io/library/ubuntu:26.04@sha256:889d056d5c6c0bfb55789ff3710681d68e50713cb562d2196dc07110599c7a6f AS xpra-target
+
+COPY containers/live-target/install-base.sh /usr/local/sbin/install-live-target
+RUN /bin/bash /usr/local/sbin/install-live-target \
+    && rm -f /usr/local/sbin/install-live-target
+
+COPY containers/live-target/sshd.conf /etc/ssh/sshd_config.d/99-elsewindow-e2e.conf
+COPY containers/live-target/entrypoint.sh /usr/local/sbin/elsewindow-e2e-entrypoint
+
+RUN chmod 0644 /etc/ssh/sshd_config.d/99-elsewindow-e2e.conf \
+    && chmod 0755 /usr/local/sbin/elsewindow-e2e-entrypoint \
+    && /usr/sbin/sshd -t \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        --no-install-recommends ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --chmod=0700 \
+    containers/xpra/install-release.py \
+    tools/install_xpra_release.py \
+    /usr/local/libexec/
+COPY --chmod=0600 \
+    xpra-release/release.json \
+    xpra-release/archive.tar \
+    /tmp/xpra-release/
+RUN /usr/bin/python3 /usr/local/libexec/install-release.py \
+    && install -d -m 0700 -o xpra-test -g xpra-test /run/user/1001 \
+    && rm -f /usr/local/libexec/install-release.py
+
+EXPOSE 22
+ENTRYPOINT ["/usr/local/sbin/elsewindow-e2e-entrypoint"]

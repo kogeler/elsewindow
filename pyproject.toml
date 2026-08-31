@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elsewindow"
+dynamic = ["version"]
+description = "Run one remote Linux GUI application through Xpra over one owned OpenSSH master"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.13,<3.15"
+authors = [{ name = "kogeler" }]
+maintainers = [{ name = "kogeler" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["xpra", "openssh", "ssh", "wayland", "remote-desktop"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
+]
+dependencies = [
+    "ssh-wrapper==0.1.0",
+]
+
+[project.optional-dependencies]
+quality = [
+    "bandit[toml]==1.9.4",
+    "mypy==2.3.1",
+    "pip-audit==2.10.1",
+    "pip-licenses==5.5.5",
+    "ruff==0.16.3",
+]
+test = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+]
+package = [
+    "build==1.5.0",
+    "setuptools==84.0.0",
+    "wheel==0.48.0",
+]
+standalone = [
+    "pyinstaller==6.22.2",
+]
+docs = [
+    "mkdocs-material==9.7.7",
+]
+
+[project.scripts]
+elsewindow = "elsewindow.cli:main"
+
+[project.urls]
+Homepage = "https://kogeler.github.io/elsewindow/"
+Documentation = "https://kogeler.github.io/elsewindow/"
+Repository = "https://github.com/kogeler/elsewindow"
+Issues = "https://github.com/kogeler/elsewindow/issues"
+Changelog = "https://github.com/kogeler/elsewindow/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+include = ["elsewindow*"]
+
+[tool.setuptools.package-data]
+elsewindow = ["live-cli.yml", "profiles.yml", "py.typed"]
+
+[tool.setuptools.dynamic]
+version = { file = ".version" }
+
+[tool.mypy]
+files = ["elsewindow"]
+python_version = "3.13"
+strict = true
+
+[tool.bandit]
+exclude_dirs = [
+    "tests",
+    "venv-quality",
+    "venv-docs",
+    "venv-test",
+    "venv-package",
+    "venv-standalone",
+    "venv-runtime",
+]
+skips = ["B101", "B108", "B404", "B603"]
+
+[tool.coverage.run]
+branch = true
+data_file = ".artifacts/.coverage"
+source = ["elsewindow"]
+
+[tool.coverage.report]
+fail_under = 70
+precision = 2
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
