@@ -45,7 +45,7 @@ test = [
     "pytest-xdist==3.8.0",
 ]
 package = [
-    "build==1.5.0",
+    "build==1.6.0",
     "setuptools==84.0.0",
     "wheel==0.48.0",
 ]
