@@ -215,6 +215,17 @@ def test_current_locks_and_versions_validate_with_stdlib_helpers(
     }
 
 
+def test_dependabot_groups_ecosystems_and_keeps_runtime_manual() -> None:
+    dependabot = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
+
+    assert dependabot.count("package-ecosystem:") == 2
+    assert dependabot.count("open-pull-requests-limit: 1") == 2
+    assert dependabot.count('          - "*"') == 2
+    assert 'dependency-name: "ssh-wrapper"' in dependabot
+    assert "python-dependencies:" in dependabot
+    assert "github-actions:" in dependabot
+
+
 def test_audit_starts_with_no_reviewed_exceptions() -> None:
     exceptions = json.loads(
         (ROOT / ".github/dependency-audit-exceptions.json").read_text(encoding="utf-8")
@@ -225,16 +236,23 @@ def test_audit_starts_with_no_reviewed_exceptions() -> None:
 def test_dependency_audiences_have_exact_direct_owners() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     audiences = project["project"]["optional-dependencies"]
-    assert set(audiences) == {"quality", "test", "package", "standalone", "docs"}
+    expected = {
+        "quality": {"bandit", "mypy", "pip-audit", "pip-licenses", "ruff"},
+        "test": {"pytest", "pytest-asyncio", "pytest-cov", "pytest-xdist"},
+        "package": {"build", "setuptools", "wheel"},
+        "standalone": {"pyinstaller"},
+        "docs": {"mkdocs-material"},
+    }
+    assert set(audiences) == set(expected)
     flattened = [requirement for values in audiences.values() for requirement in values]
     assert len(flattened) == len(set(flattened))
-    assert "ruff==0.16.3" in audiences["quality"]
-    assert "pytest==9.1.1" in audiences["test"]
-    assert "build==1.5.0" in audiences["package"]
-    assert "setuptools==84.0.0" in audiences["package"]
-    assert "wheel==0.48.0" in audiences["package"]
-    assert audiences["standalone"] == ["pyinstaller==6.22.2"]
-    assert audiences["docs"] == ["mkdocs-material==9.7.7"]
+    for audience, requirements in audiences.items():
+        assert all(requirement.count("==") == 1 for requirement in requirements)
+        names = {
+            requirement.partition("==")[0].partition("[")[0]
+            for requirement in requirements
+        }
+        assert names == expected[audience]
 
 
 def test_distribution_contract_includes_runtime_yaml_and_console_entry() -> None:

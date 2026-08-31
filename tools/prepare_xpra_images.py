@@ -31,7 +31,6 @@ PODMAN: Final = os.environ.get("PODMAN", "podman")
 DESCRIPTOR: Final = ROOT / ".artifacts/xpra-images/current.json"
 OWNER_LABEL: Final = "io.elsewindow.owner"
 OWNER_VALUE: Final = "xpra-image-verification"
-FORK_OWNER_LABEL: Final = "io.xpra.lab.owner"
 COMMAND_TIMEOUT: Final = 1800
 IMAGE_LABEL_INPUT: Final = f"{installer.IMAGE_LABEL_PREFIX}.input-sha256"
 IMAGE_LABEL_ROLE: Final = f"{installer.IMAGE_LABEL_PREFIX}.role"
@@ -516,7 +515,6 @@ def prepare() -> dict[str, Any]:
     if os.geteuid() == 0:
         raise ImageError("Xpra image preparation requires rootless Podman")
     assert_no_runtime(OWNER_LABEL)
-    assert_no_runtime(FORK_OWNER_LABEL)
     api, release, raw = resolve_release()
     with tempfile.TemporaryDirectory(prefix="elsewindow-images-") as temporary:
         stage = Path(temporary)

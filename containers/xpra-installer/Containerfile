@@ -21,11 +21,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
         > /etc/apt/apt.conf.d/99-rootless-container-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --chmod=0700 \
-    tools/container_payload.py \
-    tests/xpra_installer_guest.py \
-    /usr/local/libexec/
-
 COPY --chmod=0755 \
     tools/install_xpra_release.py \
     /usr/local/libexec/install_xpra_release.py

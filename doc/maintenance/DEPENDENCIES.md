@@ -28,9 +28,12 @@ against its current constraints.
 provenance. `make dependency-snapshot` produces the six GitHub dependency
 manifests deterministically.
 
-Dependabot groups the runtime dependency, quality/test tools, packaging tools,
-and GitHub Actions separately. Every accepted Python update still regenerates
-all affected locks together so shared transitive dependencies stay coherent.
+Dependabot groups all ordinary Python version updates into one pull request and
+all GitHub Actions updates into one other pull request, so one scheduled run
+opens at most one update per ecosystem. The coordinated `ssh-wrapper` runtime
+contract is excluded from automatic version changes. Every accepted Python
+update changes its direct pin and generated affected locks together so shared
+transitive dependencies stay coherent.
 
 `make audit` checks every lock and accepts only exact findings in
 [`dependency-audit-exceptions.json`](../../.github/dependency-audit-exceptions.json);

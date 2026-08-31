@@ -37,9 +37,11 @@ Run the destructive package acceptance only on a host with rootless Podman:
 make xpra-installer-test
 ```
 
-It builds fresh Debian 13 and Ubuntu 26.04 containers, streams every build and
-fixture payload over stdin, and validates clean and replacement installation.
-It never installs host packages.
+It builds fresh Debian 13 and Ubuntu 26.04 containers and selects the newest
+valid package release currently published by the maintained fork. Each guest
+validates a clean installation, a declined replacement, and a confirmed
+purge/reinstallation of that same current release. The gate never requires a
+retained predecessor and never installs host packages.
 
 ### Standalone system installer
 

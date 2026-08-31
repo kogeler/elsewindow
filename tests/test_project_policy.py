@@ -19,6 +19,13 @@ from tools.project_tree import ProjectTreeError, project_files
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
+HOST_LOCAL_DOCUMENT_MARKERS = (
+    "/home/",
+    "/Users/",
+    "/run/user/",
+    "file://",
+    "\\Users\\",
+)
 
 
 def test_project_has_one_identity_and_no_foreign_application_markers() -> None:
@@ -28,6 +35,10 @@ def test_project_has_one_identity_and_no_foreign_application_markers() -> None:
         "remote_" + "ssh_" + "core",
         "remote_" + "xpra",
         "remote-" + "xpra-" + "run",
+        "xpra_" + "lab",
+        "xpra-" + "lab",
+        "xpra " + "lab",
+        "xpra." + "lab",
         "kogeler/" + "remote-" + "xpra",
         "Remote " + "Xpra Run",
     )
@@ -134,6 +145,14 @@ def test_user_docs_explain_why_the_maintained_xpra_fork_is_required() -> None:
         "generic upstream build",
     ):
         assert required in guide
+
+
+def test_documentation_does_not_publish_host_local_paths() -> None:
+    for path in project_files(ROOT):
+        if path.suffix.lower() not in {".md", ".rst"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert not any(marker in text for marker in HOST_LOCAL_DOCUMENT_MARKERS), path
 
 
 def test_container_transport_has_no_host_filesystem_channel() -> None:

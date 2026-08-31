@@ -101,7 +101,7 @@ jobs:
         run: make package reproducibility smoke-wheel smoke-sdist SYSTEM_PYTHON=python
       - name: Preserve exact Python release candidates
         if: inputs.upload_release_artifacts
-        uses: actions/upload-artifact@043f32080c4e0b0294dd153ee0e9c1c351dc85ec # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-distributions
           path: |
@@ -139,7 +139,7 @@ jobs:
           STANDALONE_ARCH=${{ matrix.architecture }}
       - name: Preserve exact standalone release candidate
         if: inputs.upload_release_artifacts
-        uses: actions/upload-artifact@043f32080c4e0b0294dd153ee0e9c1c351dc85ec # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: standalone-${{ matrix.architecture }}
           path: dist/elsewindow-linux-${{ matrix.architecture }}
@@ -275,11 +275,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: ${{ matrix.language }}
       - name: Analyze
-        uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           category: /language:${{ matrix.language }}
 

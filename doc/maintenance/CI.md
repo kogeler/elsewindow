@@ -17,14 +17,13 @@ is `contents: read`.
 - exact-lock audit and same-repository pull-request dependency review;
 - Python and Actions CodeQL;
 - exact version progression with unpublished-version recovery;
-- Debian 13 and Ubuntu 26.04 installer acceptance;
+- Debian 13 and Ubuntu 26.04 installer acceptance using only the newest
+  currently published maintained-fork package release;
 - one release-backed SSH/Xpra lifecycle gate using a clean-installed wheel.
 
 The two architecture jobs build their executable natively; no cross-labeled
-or foreign-platform artifact is accepted. The runner labels were rechecked
-against the public
-[GitHub runner-images inventory](https://github.com/actions/runner-images#available-images)
-on 2026-08-30. Hosted execution remains pending until the first push.
+or foreign-platform artifact is accepted. Their labels come from the public
+[GitHub runner-images inventory](https://github.com/actions/runner-images#available-images).
 
 [`dependency-submission.yml`](../../.github/workflows/dependency-submission.yml)
 runs only on trusted direct `main` changes. Its one job receives

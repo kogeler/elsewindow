@@ -45,7 +45,7 @@ application's source tree.
   group. Cleanup targets only recorded owned resources.
 - Before changing an Xpra argument, compare `elsewindow/live-cli.yml` and
   `elsewindow/profiles.yml` byte-for-byte with the current canonical files in
-  `kogeler/xpra:develop/fork-maintenance/`.
+  [`kogeler/xpra:develop/fork-maintenance/`](https://github.com/kogeler/xpra/tree/develop/fork-maintenance/).
 - Do not duplicate YAML option or numeric values in Python or tests. Route all
   applicable Xpra version, information, and detach commands through the shared
   YAML command assembler.
@@ -82,13 +82,24 @@ application's source tree.
   sufficient; do not restore the legacy GID 65534 or widen the namespace.
 - The live harness has one automatic route using both immutable release-backed
   images, the production profile assembler, and a newly generated Ed25519 key.
+- Installer acceptance and image preparation resolve the newest valid fork
+  package release during each run. Never require a predecessor or retained
+  release history as a gate input.
 
 ## Change and validation workflow
 
 Keep repository-owned text in English and internal documentation links
-relative. Update implementation, focused tests, and the owning user,
-architecture, security, development, or maintenance documentation together.
-Run the smallest real test immediately after each atomic change.
+relative. Never publish operator-specific absolute paths, usernames, home or
+runtime directories, or sibling-checkout layouts in repository documentation
+or operator-facing reports. Refer to an external source repository by its
+canonical HTTPS GitHub URL; a locally available checkout is only an inspection
+detail and its host path must not be recorded. Refer to downstream Xpra work
+only as part of the maintained fork at
+[`kogeler/xpra`](https://github.com/kogeler/xpra/tree/develop); do not revive a
+retired standalone repository identity.
+Update implementation, focused tests, and the owning user, architecture,
+security, development, or maintenance documentation together. Run the smallest
+real test immediately after each atomic change.
 
 Every local gate reads the current filesystem bytes, including modified and
 untracked maintained files. Never select inputs from the Git index, require a

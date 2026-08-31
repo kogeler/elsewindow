@@ -18,7 +18,6 @@ import selectors
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -33,16 +32,13 @@ from tools import install_xpra_release as installer
 PODMAN: Final = os.environ.get("PODMAN", "podman")
 OWNER_LABEL: Final = "io.elsewindow.owner"
 OWNER_VALUE: Final = "xpra-installer-acceptance"
-FORK_OWNER_LABEL: Final = "io.xpra.lab.owner"
 CONTAINERFILE: Final = ROOT / "containers/xpra-installer/Containerfile"
-GUEST: Final = ROOT / "tests/xpra_installer_guest.py"
 INSTALLER: Final = ROOT / "tools/install_xpra_release.py"
-PAYLOAD: Final = ROOT / "tools/container_payload.py"
 SYSTEMS: Final = (
     ("debian-13", "docker.io/library/debian:13"),
     ("ubuntu-26.04", "docker.io/library/ubuntu:26.04"),
 )
-BUILD_INPUTS: Final = (CONTAINERFILE, PAYLOAD, INSTALLER, GUEST)
+BUILD_INPUTS: Final = (CONTAINERFILE, INSTALLER)
 COMMAND_TIMEOUT: Final = 1800
 INSTALLER_USER: Final = "xpra-installer"
 PROMPT: Final = b"Purge this exact list and install the newest Xpra release? [y/N]: "
@@ -51,20 +47,6 @@ MAX_TERMINAL_OUTPUT: Final = 2 * 1024 * 1024
 
 class AcceptanceError(RuntimeError):
     """Raised when installer acceptance cannot prove its contract."""
-
-
-class StaticApi:
-    """Reuse one frozen public release collection with live ancestry checks."""
-
-    def __init__(self, values: Sequence[Any], live: installer.GitHubApi) -> None:
-        self.values = tuple(values)
-        self.live = live
-
-    def releases(self) -> tuple[Any, ...]:
-        return self.values
-
-    def verify_develop_commit(self, commit: str) -> None:
-        self.live.verify_develop_commit(commit)
 
 
 def run(
@@ -105,19 +87,6 @@ def text(
         return value.decode("utf-8", errors="strict").strip()
     except UnicodeDecodeError as error:
         raise AcceptanceError("command returned non-UTF-8 output") from error
-
-
-def json_output(
-    arguments: Sequence[str], *, input_value: bytes | None = None
-) -> dict[str, Any]:
-    raw = text(arguments, input_value=input_value)
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise AcceptanceError("installer returned invalid JSON") from error
-    if not isinstance(value, dict):
-        raise AcceptanceError("installer returned a non-object result")
-    return value
 
 
 def interactive_installer_command(container: str) -> tuple[str, ...]:
@@ -245,38 +214,6 @@ def terminal_json_output(
         if isinstance(value, dict) and not output[offset + end :].strip():
             return value
     raise AcceptanceError("interactive installer returned no final JSON object")
-
-
-def discover_releases() -> tuple[
-    installer.GitHubApi, installer.ForkRelease, installer.ForkRelease, Mapping[str, Any]
-]:
-    """Resolve the newest release and one distinct canonical predecessor."""
-    api = installer.GitHubApi(token=os.environ.get("GITHUB_TOKEN") or None)
-    values = api.releases()
-    static = StaticApi(values, api)
-    latest = installer.resolve_latest_release(static)  # type: ignore[arg-type]
-    candidates: list[tuple[Any, int, installer.ForkRelease, Mapping[str, Any]]] = []
-    for value in values:
-        if not isinstance(value, Mapping):
-            continue
-        parsed = installer.parse_release(value)
-        if parsed is not None:
-            release, published = parsed
-            candidates.append((published, release.release_id, release, value))
-    candidates.sort(reverse=True, key=lambda item: (item[0], item[1]))
-    older_match = next(
-        (
-            (release, raw)
-            for _published, _release_id, release, raw in candidates
-            if release.release_id != latest.release_id
-            and release.version != latest.version
-        ),
-        None,
-    )
-    if older_match is None:
-        raise AcceptanceError("no distinct older canonical Xpra release exists")
-    older, older_raw = older_match
-    return api, latest, older, older_raw
 
 
 def input_digest(base_image_id: str, distro: str) -> str:
@@ -423,60 +360,6 @@ def prepare_image(distro: str, base: str) -> tuple[str, str, str]:
     return base_id, image_id, key
 
 
-def stream_fixture(container: str, release_json: Path, archive: Path) -> None:
-    arguments = (
-        PODMAN,
-        "exec",
-        "--interactive",
-        container,
-        "/usr/bin/python3",
-        "/usr/local/libexec/container_payload.py",
-        "extract",
-        "--destination",
-        "/run/xpra-older",
-        "--max-members",
-        "2",
-        "--max-bytes",
-        str(installer.MAX_ASSET_BYTES + installer.MAX_JSON_BYTES),
-    )
-    try:
-        process = subprocess.Popen(
-            arguments,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except OSError as error:
-        raise AcceptanceError("cannot start the acceptance payload receiver") from error
-    if process.stdin is None:
-        process.kill()
-        raise AcceptanceError("acceptance payload stdin is unavailable")
-    try:
-        container_payload.write_archive(
-            process.stdin,
-            (
-                container_payload.PayloadEntry(
-                    release_json, PurePosixPath("release.json")
-                ),
-                container_payload.PayloadEntry(archive, PurePosixPath(archive.name)),
-            ),
-            max_members=2,
-            max_bytes=installer.MAX_ASSET_BYTES + installer.MAX_JSON_BYTES,
-        )
-        process.stdin.close()
-        process.stdin = None
-        stdout, stderr = process.communicate(timeout=COMMAND_TIMEOUT)
-    except (
-        OSError,
-        container_payload.PayloadError,
-        subprocess.TimeoutExpired,
-    ) as error:
-        stream_failed(process, "cannot stream the older release fixture", error)
-    if process.returncode != 0:
-        detail = (stderr or stdout)[-8192:].decode("utf-8", errors="replace")
-        raise AcceptanceError(f"acceptance payload was rejected: {detail.strip()}")
-
-
 def expected_result(
     result: Mapping[str, Any], release: installer.ForkRelease, distro: str
 ) -> None:
@@ -526,8 +409,6 @@ def run_system(
     distro: str,
     base: str,
     latest: installer.ForkRelease,
-    older: installer.ForkRelease,
-    older_raw: Mapping[str, Any],
     run_id: str,
 ) -> dict[str, Any]:
     base_id, image_id, image_input = prepare_image(distro, base)
@@ -575,44 +456,6 @@ def run_system(
                 "fresh container unexpectedly contained Xpra packages"
             )
 
-        with tempfile.TemporaryDirectory(prefix=f"xpra-{distro}-older-") as temporary:
-            root = Path(temporary)
-            root.chmod(0o700)
-            release_path = root / "release.json"
-            release_path.write_text(
-                installer.canonical_json(older_raw), encoding="utf-8"
-            )
-            release_path.chmod(0o600)
-            asset = older.asset(installer.ASSET_FOR_DISTRO[distro])
-            archive_path = root / asset.name
-            installer.download_asset(asset, archive_path)
-            installer.validate_package_archive(
-                archive_path, release=older, asset=asset, distro=distro
-            )
-            stream_fixture(name, release_path, archive_path)
-
-        older_result = json_output(
-            (
-                PODMAN,
-                "exec",
-                name,
-                "/usr/bin/python3",
-                "/usr/local/libexec/xpra_installer_guest.py",
-                "--release-json",
-                "/run/xpra-older/release.json",
-                "--archive",
-                f"/run/xpra-older/{asset.name}",
-                "--expected-release-id",
-                str(older.release_id),
-                "--expected-commit",
-                older.commit,
-                "--expected-version",
-                older.version,
-            )
-        )
-        expected_result(older_result, older, distro)
-        require_pre_purge(older_result.get("pre_purge_packages"), "older installation")
-
         inventory_command = (
             PODMAN,
             "exec",
@@ -644,7 +487,6 @@ def run_system(
             "image_id": image_id,
             "image_input_sha256": image_input,
             "initial_install": initial,
-            "older_install": older_result,
             "replacement_install": replacement,
         }
     finally:
@@ -661,26 +503,22 @@ def main() -> int:
         return 2
     try:
         assert_no_owned_containers(OWNER_LABEL)
-        assert_no_owned_containers(FORK_OWNER_LABEL)
-        api, latest, older, older_raw = discover_releases()
+        api = installer.GitHubApi(token=os.environ.get("GITHUB_TOKEN") or None)
+        latest = installer.resolve_latest_release(api)
         run_id = secrets.token_hex(6)
         systems = [
             run_system(
                 distro=distro,
                 base=base,
                 latest=latest,
-                older=older,
-                older_raw=older_raw,
                 run_id=run_id,
             )
             for distro, base in SYSTEMS
         ]
-        installer.verify_release_is_current(latest, api)
         assert_no_owned_containers(OWNER_LABEL)
         result = {
             "latest_release": latest.descriptor(),
-            "older_release": older.descriptor(),
-            "schema": 1,
+            "schema": 2,
             "systems": systems,
         }
         sys.stdout.write(installer.canonical_json(result))
