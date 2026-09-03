@@ -15,6 +15,9 @@ All notable changes to Elsewindow are documented here.
 - Aligned both local lock resolver stages with Dependabot's pip and pip-tools
   pair, and made published runtime metadata derive from `requirements.in`
   without a second version authority.
+- Made an exact existing release suppress the reusable release CI and both
+  publication jobs, while ordinary CI accepts maintenance at an already
+  published version and authenticates installer acceptance API requests.
 
 ## [0.1.0] - 2026-08-30
 

@@ -93,6 +93,9 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "${{ matrix.python }}" in ci
     assert "Exact version progression" in ci
     assert "unpublished_base_version" in ci
+    assert "published_current_version" in ci
+    version_job = ci.split("\n  version:", 1)[1].split("\n  codeql:", 1)[0]
+    assert 'elif [[ "$PUBLISHED_CURRENT_VERSION" != "true" ]]' in version_job
     assert "standalone-amd64" not in ci
     assert "standalone-${{ matrix.architecture }}" in ci
     assert "persist-credentials: false" in ci
@@ -122,6 +125,14 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert release.count("id-token: write") == 1
     assert "uses: ./.github/workflows/ci.yml" in release
     assert "base_ref: ${{ github.event.before }}" in release
+    release_ci = release.split("\n  ci:", 1)[1].split("\n  publish-pypi:", 1)[0]
+    assert "needs: release-state" in release_ci
+    assert "if: needs.release-state.outputs.release_required == 'true'" in release_ci
+    assert "release_required: ${{ steps.check.outputs.release_required }}" in release
+    assert 'core.setOutput("release_required", String(releaseRequired))' in release
+    assert "const releaseCommit = published ? tagCommit : context.sha;" in release
+    assert 'read("CHANGELOG.md", releaseCommit)' in release
+    assert "paths:" not in release.split("\npermissions:", 1)[0]
     assert "pypa/gh-action-pypi-publish@" in release
     assert "skip-existing" not in release
     assert "password:" not in release
@@ -129,6 +140,8 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "elsewindow-linux-amd64" in release
     assert "elsewindow-linux-arm64" in release
     assert "SHA256SUMS.txt" in release
+    installer = ci.split("\n  installer:", 1)[1].split("\n  live:", 1)[0]
+    assert "GITHUB_TOKEN: ${{ github.token }}" in installer
 
 
 def test_make_exposes_the_complete_governance_surface() -> None:
