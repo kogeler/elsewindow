@@ -25,6 +25,7 @@ DIRECT_REQUIREMENT = re.compile(
     r"^([A-Za-z0-9][A-Za-z0-9._-]*)"
     r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?==([^\s;]+)$"
 )
+INPUT_INCLUDE = re.compile(r"^-r ([^\s]+)$")
 
 
 class SnapshotError(ValueError):
@@ -36,7 +37,8 @@ def normalize_package(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).casefold()
 
 
-def _load_project(path: Path) -> dict[str, object]:
+def _validate_project(path: Path) -> None:
+    """Validate the one-way package metadata link to the runtime input."""
     try:
         document = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -44,27 +46,76 @@ def _load_project(path: Path) -> dict[str, object]:
     project = document.get("project")
     if not isinstance(project, dict):
         raise SnapshotError(f"{path}: missing [project] table")
-    return project
+    if project.get("dynamic") != ["version", "dependencies"]:
+        raise SnapshotError(
+            f"{path}: [project].dynamic must be ['version', 'dependencies']"
+        )
+    if "dependencies" in project or "optional-dependencies" in project:
+        raise SnapshotError(
+            f"{path}: dependency versions must exist only in requirements inputs"
+        )
+
+    tool = document.get("tool")
+    setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+    dynamic = setuptools.get("dynamic") if isinstance(setuptools, dict) else None
+    if not isinstance(dynamic, dict) or dynamic.get("dependencies") != {
+        "file": ["requirements.in"]
+    }:
+        raise SnapshotError(
+            f"{path}: [tool.setuptools.dynamic].dependencies must read requirements.in"
+        )
 
 
-def direct_requirements(requirements: object, *, source: str) -> dict[str, str]:
-    """Return exact direct package versions from one dependency array."""
-    if not isinstance(requirements, list) or not all(
-        isinstance(requirement, str) for requirement in requirements
-    ):
-        raise SnapshotError(f"{source}: dependencies must be an array of strings")
+def direct_requirements(
+    path: Path, *, runtime_input: Path | None = None
+) -> dict[str, str]:
+    """Return exact direct pins from one constrained requirements input."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SnapshotError(f"cannot read {path}: {error}") from error
+
     direct: dict[str, str] = {}
-    for requirement in requirements:
+    includes: list[str] = []
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        requirement = line.strip()
+        if not requirement or requirement.startswith("#"):
+            continue
+        include_match = INPUT_INCLUDE.fullmatch(requirement)
+        if include_match is not None:
+            includes.append(include_match.group(1))
+            continue
         match = DIRECT_REQUIREMENT.fullmatch(requirement)
         if match is None:
             raise SnapshotError(
-                f"{source}: dependency must be one exact PyPI pin: {requirement}"
+                f"{path}:{line_number}: dependency must be one exact PyPI pin"
             )
         name = normalize_package(match.group(1))
         if name in direct:
-            raise SnapshotError(f"{source}: duplicate direct dependency: {name}")
+            raise SnapshotError(f"{path}: duplicate direct dependency: {name}")
         direct[name] = match.group(2)
-    return direct
+    if not direct:
+        raise SnapshotError(f"{path}: input contains no direct dependency pins")
+
+    if runtime_input is None:
+        if includes:
+            raise SnapshotError(
+                f"{path}: independent input cannot include another file"
+            )
+        return direct
+
+    expected_include = runtime_input.name
+    if includes != [expected_include]:
+        raise SnapshotError(
+            f"{path}: must include exactly '-r {expected_include}' once"
+        )
+    runtime = direct_requirements(runtime_input)
+    duplicates = sorted(set(runtime) & set(direct))
+    if duplicates:
+        raise SnapshotError(
+            f"{path}: runtime dependencies repeated locally: {', '.join(duplicates)}"
+        )
+    return runtime | direct
 
 
 def read_lock(path: Path) -> dict[str, str]:
@@ -128,11 +179,10 @@ def read_lock(path: Path) -> dict[str, str]:
 def _resolved_dependencies(
     path: Path,
     *,
-    runtime: dict[str, str],
-    tools: dict[str, str],
+    direct: dict[str, str],
+    scope: str,
 ) -> dict[str, dict[str, str]]:
     pins = read_lock(path)
-    direct = runtime | tools
     missing = sorted(set(direct) - set(pins))
     if missing:
         raise SnapshotError(
@@ -150,7 +200,7 @@ def _resolved_dependencies(
         name: {
             "package_url": f"pkg:pypi/{quote(name, safe='')}@{quote(version, safe='')}",
             "relationship": "direct" if name in direct else "indirect",
-            "scope": "runtime" if name in runtime else "development",
+            "scope": scope,
         }
         for name, version in sorted(pins.items())
     }
@@ -158,48 +208,34 @@ def _resolved_dependencies(
 
 def build_manifests(root: Path) -> dict[str, dict[str, object]]:
     """Build the exact persistent lock manifests."""
-    project = _load_project(root / "pyproject.toml")
-    runtime = direct_requirements(
-        project.get("dependencies"), source="pyproject.toml dependencies"
+    _validate_project(root / "pyproject.toml")
+    runtime_input = root / "requirements.in"
+    definitions = (
+        ("requirements.txt", "requirements.in", False, "runtime"),
+        *(
+            (
+                f"requirements-{audience}.txt",
+                f"requirements-{audience}.in",
+                True,
+                "development",
+            )
+            for audience in AUDIENCES
+        ),
     )
-    optional = project.get("optional-dependencies")
-    if not isinstance(optional, dict) or set(optional) != set(AUDIENCES):
-        raise SnapshotError(
-            "pyproject.toml: expected quality, test, package, standalone, and docs "
-            "audiences"
+    manifests: dict[str, dict[str, object]] = {}
+    for lock_name, input_name, extends_runtime, scope in definitions:
+        direct = direct_requirements(
+            root / input_name,
+            runtime_input=runtime_input if extends_runtime else None,
         )
-    groups = {
-        audience: direct_requirements(
-            optional[audience],
-            source=f"pyproject.toml [project.optional-dependencies].{audience}",
-        )
-        for audience in AUDIENCES
-    }
-    owners: dict[str, str] = {}
-    for audience, requirements in groups.items():
-        for name in requirements:
-            if name in runtime:
-                raise SnapshotError(f"{name} is repeated in runtime and {audience}")
-            if previous := owners.get(name):
-                raise SnapshotError(
-                    f"{name} is owned by both {previous} and {audience}"
-                )
-            owners[name] = audience
-
-    definitions = [("requirements.txt", {})]
-    definitions.extend(
-        (f"requirements-{audience}.txt", groups[audience]) for audience in AUDIENCES
-    )
-    return {
-        name: {
-            "name": name,
-            "file": {"source_location": name},
+        manifests[lock_name] = {
+            "name": lock_name,
+            "file": {"source_location": lock_name},
             "resolved": _resolved_dependencies(
-                root / name, runtime=runtime, tools=tools
+                root / lock_name, direct=direct, scope=scope
             ),
         }
-        for name, tools in definitions
-    }
+    return manifests
 
 
 def _run(root: Path, output: Path) -> None:

@@ -61,8 +61,13 @@ def require_dynamic_metadata(root: Path) -> None:
         dynamic = document["tool"]["setuptools"]["dynamic"]
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
         raise VersionError(f"cannot read dynamic version metadata: {error}") from error
-    if not isinstance(project, dict) or project.get("dynamic") != ["version"]:
-        raise VersionError("pyproject.toml must declare only a dynamic project version")
+    if not isinstance(project, dict) or project.get("dynamic") != [
+        "version",
+        "dependencies",
+    ]:
+        raise VersionError(
+            "pyproject.toml must declare dynamic project version and dependencies"
+        )
     if "version" in project:
         raise VersionError("pyproject.toml must not contain a static project.version")
     if not isinstance(dynamic, dict) or dynamic.get("version") != {"file": ".version"}:

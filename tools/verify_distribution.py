@@ -42,7 +42,10 @@ PROJECT_URLS = {
     "Issues, https://github.com/kogeler/elsewindow/issues",
     "Changelog, https://github.com/kogeler/elsewindow/blob/main/CHANGELOG.md",
 }
-EXTRAS = {"quality", "test", "package", "standalone", "docs"}
+DIRECT_REQUIREMENT = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?==([^\s;]+)$"
+)
 FORBIDDEN_BYTES = (
     b"remote" + b"_xpra",
     b"remote-" + b"xpra-run",
@@ -71,8 +74,74 @@ def _requirement_key(value: str) -> str:
     return re.sub(r"\s+", "", value)
 
 
+def _normalize_package(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).casefold()
+
+
+def _direct_input(
+    data: bytes, *, source: str, expected_include: str | None = None
+) -> dict[str, tuple[str, str]]:
+    """Read exact direct pins and one optional runtime include."""
+    try:
+        content = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise DistributionError(f"{source} is not UTF-8") from error
+    direct: dict[str, tuple[str, str]] = {}
+    includes: list[str] = []
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        requirement = line.strip()
+        if not requirement or requirement.startswith("#"):
+            continue
+        if requirement.startswith("-r "):
+            includes.append(requirement.removeprefix("-r "))
+            continue
+        match = DIRECT_REQUIREMENT.fullmatch(requirement)
+        if match is None:
+            raise DistributionError(
+                f"{source}:{line_number}: dependency is not one exact PyPI pin"
+            )
+        name = _normalize_package(match.group(1))
+        if name in direct:
+            raise DistributionError(f"{source}: duplicate direct dependency: {name}")
+        direct[name] = (requirement, match.group(2))
+    if not direct:
+        raise DistributionError(f"{source} contains no direct dependency pins")
+    expected = [] if expected_include is None else [expected_include]
+    if includes != expected:
+        raise DistributionError(f"{source} requirements include differs")
+    return direct
+
+
+def _project(document: dict[str, object], *, source: str) -> dict[str, object]:
+    project = document.get("project")
+    if not isinstance(project, dict):
+        raise DistributionError(f"{source} project metadata is missing")
+    if project.get("dynamic") != ["version", "dependencies"]:
+        raise DistributionError(f"{source} dynamic metadata fields differ")
+    if (
+        "version" in project
+        or "dependencies" in project
+        or ("optional-dependencies" in project)
+    ):
+        raise DistributionError(f"{source} duplicates dynamic metadata")
+    tool = document.get("tool")
+    setuptools = tool.get("setuptools") if isinstance(tool, dict) else None
+    dynamic = setuptools.get("dynamic") if isinstance(setuptools, dict) else None
+    if not isinstance(dynamic, dict) or dynamic != {
+        "version": {"file": ".version"},
+        "dependencies": {"file": ["requirements.in"]},
+    }:
+        raise DistributionError(f"{source} setuptools dynamic metadata differs")
+    return project
+
+
 def _metadata(
-    data: bytes, *, version: str, readme: str, project: dict[str, object]
+    data: bytes,
+    *,
+    version: str,
+    readme: str,
+    project: dict[str, object],
+    runtime_requirements: dict[str, tuple[str, str]],
 ) -> Message:
     message = BytesParser(policy=policy.default).parsebytes(data)
     expected = {
@@ -111,27 +180,11 @@ def _metadata(
         raise DistributionError("metadata keywords differ")
     if message.get_all("Classifier", []) != classifiers:
         raise DistributionError("metadata classifiers differ")
-    if set(message.get_all("Provides-Extra", [])) != EXTRAS:
-        raise DistributionError("metadata optional dependency audiences differ")
-    dependencies = project.get("dependencies")
-    optional = project.get("optional-dependencies")
-    if not isinstance(dependencies, list) or not all(
-        isinstance(requirement, str) for requirement in dependencies
-    ):
-        raise DistributionError("source runtime dependencies are invalid")
-    if not isinstance(optional, dict) or set(optional) != EXTRAS:
-        raise DistributionError("source optional dependencies are invalid")
-    expected_requirements = list(dependencies)
-    for extra, requirements in optional.items():
-        if (
-            not isinstance(extra, str)
-            or not isinstance(requirements, list)
-            or not all(isinstance(requirement, str) for requirement in requirements)
-        ):
-            raise DistributionError("source optional dependencies are invalid")
-        expected_requirements.extend(
-            f'{requirement}; extra == "{extra}"' for requirement in requirements
-        )
+    if message.get_all("Provides-Extra", []):
+        raise DistributionError("metadata unexpectedly publishes internal audiences")
+    expected_requirements = [
+        requirement for requirement, _version in runtime_requirements.values()
+    ]
     actual_requirements = message.get_all("Requires-Dist", [])
     if len(actual_requirements) != len(expected_requirements) or {
         _requirement_key(requirement) for requirement in actual_requirements
@@ -185,14 +238,16 @@ def verify_wheel(path: Path, *, root: Path, version: str, epoch: int) -> None:
         project_document = tomllib.loads(
             (root / "pyproject.toml").read_text(encoding="utf-8")
         )
-        project = project_document.get("project")
-        if not isinstance(project, dict):
-            raise DistributionError("source project metadata is missing")
+        project = _project(project_document, source="source")
+        runtime_requirements = _direct_input(
+            (root / "requirements.in").read_bytes(), source="requirements.in"
+        )
         _metadata(
             archive.read(f"{dist_info}/METADATA"),
             version=version,
             readme=(root / "README.md").read_text(encoding="utf-8"),
             project=project,
+            runtime_requirements=runtime_requirements,
         )
         for resource in ("live-cli.yml", "profiles.yml"):
             if (
@@ -213,20 +268,12 @@ def verify_wheel(path: Path, *, root: Path, version: str, epoch: int) -> None:
             b"[console_scripts]\nelsewindow = elsewindow.cli:main\n"
         ):
             raise DistributionError("wheel console entry point differs")
-        build_requires = project_document.get("build-system", {}).get("requires")
-        setuptools = (
-            next(
-                (
-                    requirement.partition("==")[2]
-                    for requirement in build_requires
-                    if isinstance(requirement, str)
-                    and requirement.startswith("setuptools==")
-                ),
-                None,
-            )
-            if isinstance(build_requires, list)
-            else None
+        package_requirements = _direct_input(
+            (root / "requirements-package.in").read_bytes(),
+            source="requirements-package.in",
+            expected_include="requirements.in",
         )
+        setuptools = package_requirements.get("setuptools", ("", ""))[1]
         expected_wheel = (
             "Wheel-Version: 1.0\n"
             f"Generator: setuptools ({setuptools})\n"
@@ -279,6 +326,7 @@ def verify_sdist(path: Path, *, root: Path, version: str, epoch: int) -> None:
         "PKG-INFO",
         "README.md",
         "pyproject.toml",
+        "requirements.in",
         "setup.cfg",
         *(f"elsewindow/{name}" for name in PACKAGE_FILES),
         *egg_info,
@@ -345,6 +393,7 @@ def verify_sdist(path: Path, *, root: Path, version: str, epoch: int) -> None:
             "MANIFEST.in",
             "README.md",
             "pyproject.toml",
+            "requirements.in",
         ):
             if files[name] != (root / name).read_bytes():
                 raise DistributionError(f"sdist {name} differs from source")
@@ -355,6 +404,15 @@ def verify_sdist(path: Path, *, root: Path, version: str, epoch: int) -> None:
             raise DistributionError("sdist PKG-INFO copies differ")
         if files["elsewindow.egg-info/dependency_links.txt"] != b"\n":
             raise DistributionError("sdist dependency links differ")
+        runtime_requirements = _direct_input(
+            files["requirements.in"], source="sdist requirements.in"
+        )
+        expected_requires = "".join(
+            f"{requirement}\n"
+            for requirement, _version in runtime_requirements.values()
+        ).encode()
+        if files["elsewindow.egg-info/requires.txt"] != expected_requires:
+            raise DistributionError("sdist runtime requirements differ")
         if files["elsewindow.egg-info/top_level.txt"] != b"elsewindow\n":
             raise DistributionError("sdist top-level package differs")
         if (
@@ -369,14 +427,15 @@ def verify_sdist(path: Path, *, root: Path, version: str, epoch: int) -> None:
             actual_sources
         ) != expected_files - {"PKG-INFO", "setup.cfg"}:
             raise DistributionError("sdist SOURCES.txt inventory differs")
-        project = tomllib.loads(files["pyproject.toml"].decode()).get("project")
-        if not isinstance(project, dict):
-            raise DistributionError("sdist project metadata is missing")
+        project = _project(
+            tomllib.loads(files["pyproject.toml"].decode()), source="sdist"
+        )
         _metadata(
             files["PKG-INFO"],
             version=version,
             readme=(root / "README.md").read_text(encoding="utf-8"),
             project=project,
+            runtime_requirements=runtime_requirements,
         )
 
 

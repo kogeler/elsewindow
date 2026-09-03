@@ -19,6 +19,12 @@ STANDALONE_PYTHON := $(STANDALONE_VENV)/bin/python
 DOCS_PYTHON := $(DOCS_VENV)/bin/python
 MKDOCS := $(DOCS_VENV)/bin/mkdocs
 RUFF := $(QUALITY_VENV)/bin/ruff
+RUNTIME_INPUT := requirements.in
+QUALITY_INPUT := requirements-quality.in
+TEST_INPUT := requirements-test.in
+PACKAGE_INPUT := requirements-package.in
+STANDALONE_INPUT := requirements-standalone.in
+DOCS_INPUT := requirements-docs.in
 RUNTIME_LOCK := requirements.txt
 QUALITY_LOCK := requirements-quality.txt
 TEST_LOCK := requirements-test.txt
@@ -271,17 +277,17 @@ lock: lock-image
 		--env BOX_EXPORT='$(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK)' \
 		--env BOX_EXPORT_ON_SUCCESS=1 '$(LOCK_TAG)' sh -ceu \
 		'python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
-			--output-file=$(RUNTIME_LOCK) pyproject.toml; \
-		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) --extra=quality \
-			--output-file=$(QUALITY_LOCK) pyproject.toml; \
-		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) --extra=test \
-			--output-file=$(TEST_LOCK) pyproject.toml; \
-		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) --extra=package \
-			--output-file=$(PACKAGE_LOCK) pyproject.toml; \
-		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) --extra=standalone \
-			--output-file=$(STANDALONE_LOCK) pyproject.toml; \
-		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) --extra=docs \
-			--output-file=$(DOCS_LOCK) pyproject.toml; \
+			--output-file=$(RUNTIME_LOCK) $(RUNTIME_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(QUALITY_LOCK) $(QUALITY_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(TEST_LOCK) $(TEST_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(PACKAGE_LOCK) $(PACKAGE_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(STANDALONE_LOCK) $(STANDALONE_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(DOCS_LOCK) $(DOCS_INPUT); \
 		chmod 0644 $(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK)' \
 		| $(PAYLOAD_MERGE)
 	@chmod 0644 '$(RUNTIME_LOCK)' '$(QUALITY_LOCK)' '$(TEST_LOCK)' \
@@ -293,17 +299,17 @@ refresh-dependencies:
 freeze-check: lock-image
 	@$(PROJECT_ARCHIVE) | $(PODMAN) run $(LOCK_ONLINE) '$(LOCK_TAG)' bash -ceu \
 		'python -m piptools compile $(COMPILE) --constraint=$(RUNTIME_LOCK) \
-			--output-file=/tmp/runtime.txt pyproject.toml; \
-		python -m piptools compile $(COMPILE) --extra=quality \
-			--constraint=$(QUALITY_LOCK) --output-file=/tmp/quality.txt pyproject.toml; \
-		python -m piptools compile $(COMPILE) --extra=test \
-			--constraint=$(TEST_LOCK) --output-file=/tmp/test.txt pyproject.toml; \
-		python -m piptools compile $(COMPILE) --extra=package \
-			--constraint=$(PACKAGE_LOCK) --output-file=/tmp/package.txt pyproject.toml; \
-		python -m piptools compile $(COMPILE) --extra=standalone \
-			--constraint=$(STANDALONE_LOCK) --output-file=/tmp/standalone.txt pyproject.toml; \
-		python -m piptools compile $(COMPILE) --extra=docs \
-			--constraint=$(DOCS_LOCK) --output-file=/tmp/docs.txt pyproject.toml; \
+			--output-file=/tmp/runtime.txt $(RUNTIME_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(QUALITY_LOCK) --output-file=/tmp/quality.txt $(QUALITY_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(TEST_LOCK) --output-file=/tmp/test.txt $(TEST_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(PACKAGE_LOCK) --output-file=/tmp/package.txt $(PACKAGE_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(STANDALONE_LOCK) --output-file=/tmp/standalone.txt $(STANDALONE_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(DOCS_LOCK) --output-file=/tmp/docs.txt $(DOCS_INPUT); \
 		diff -u <(sed "/^[[:space:]]*#/d" $(RUNTIME_LOCK)) \
 			<(sed "/^[[:space:]]*#/d" /tmp/runtime.txt); \
 		diff -u <(sed "/^[[:space:]]*#/d" $(QUALITY_LOCK)) \
@@ -403,8 +409,8 @@ confinement-test: governance-image
 
 compatibility-python: compatibility-image
 	@$(PROJECT_ARCHIVE) | $(PODMAN) run $(LOCK_ONLINE) '$(COMPATIBILITY_TAG)' sh -ceu \
-		'python -m piptools compile $(COMPILE) --extra=test \
-			--output-file=/tmp/python313.txt pyproject.toml; \
+		'python -m piptools compile $(COMPILE) \
+			--output-file=/tmp/python313.txt $(TEST_INPUT); \
 		python -m venv /tmp/tests; /tmp/tests/bin/python -m pip install --quiet \
 			--require-hashes --only-binary=:all: --requirement /tmp/python313.txt; \
 		/tmp/tests/bin/python -m pip install --quiet --no-deps --editable .; \

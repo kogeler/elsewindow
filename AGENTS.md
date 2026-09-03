@@ -29,11 +29,15 @@ application's source tree.
   dependency submission, and release automation.
 - `.github/scripts/` owns standard-library dependency, version, and release
   policy. `doc/maintenance/` owns maintainer procedures.
+- `pyproject.toml` owns package metadata, typing, security scanning, and
+  coverage policy. Published runtime metadata reads `requirements.in`
+  dynamically and must not duplicate its versions.
 - `.version` is the only human-maintained version. Dynamic package metadata,
   `elsewindow.__version__`, the changelog section, `vX.Y.Z` tag, release name,
   and notes must resolve from it.
-- Generated hash locks install the exact published `ssh-wrapper==0.1.0` wheel
-  from PyPI. Never hand-edit a lock.
+- `requirements.in` and the five `requirements-*.in` files own exact direct
+  dependency versions and are the native Dependabot inputs. Their matching
+  `requirements*.txt` files are generated hash locks. Never hand-edit a lock.
 
 ## Required runtime contracts
 
@@ -106,8 +110,11 @@ untracked maintained files. Never select inputs from the Git index, require a
 commit, derive normalization from commit metadata, or persist a successful
 gate result as authority for a later run. Dependency environments may cache
 installed tools only when their complete current lock is revalidated before
-use. When the operator supplies a local reference checkout, inspect that
-checkout directly and do not substitute an internet copy.
+use. Dependabot updates only the six `requirements*.in` inputs and their
+matching pip-compile locks; keep `pyproject.toml` excluded from its pip
+manifests and both local resolver stages aligned with Dependabot's resolver.
+When the operator supplies a local reference checkout, inspect that checkout
+directly and do not substitute an internet copy.
 
 ```bash
 make format
@@ -125,6 +132,10 @@ compatibility. Run
 `make runtime-venv` before the repository launcher. Run destructive installer
 acceptance only through `make xpra-installer-test`; it uses disposable
 containers and never changes host package inventory.
+
+After changing a direct dependency in `requirements*.in`, run `make lock` and
+review all six generated locks. Use `make refresh-dependencies` only for an
+intentional whole-tree upgrade.
 
 Use `apply_patch` for source edits and preserve unrelated work. Never create a
 commit unless the user explicitly requests one in the current conversation.

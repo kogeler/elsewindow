@@ -1,7 +1,7 @@
 # Copyright (c) 2026 kogeler
 # SPDX-License-Identifier: MIT
 
-"""Validate every generated hash lock against its exact PEP 621 owner."""
+"""Validate every generated hash lock against its exact requirements input."""
 
 from __future__ import annotations
 

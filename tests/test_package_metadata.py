@@ -19,7 +19,7 @@ def test_public_metadata_has_one_exact_elsewindow_identity() -> None:
     project = document["project"]
 
     assert project["name"] == "elsewindow"
-    assert project["dynamic"] == ["version"]
+    assert project["dynamic"] == ["version", "dependencies"]
     assert "version" not in project
     assert project["description"] == (
         "Run one remote Linux GUI application through Xpra over one owned "
@@ -33,7 +33,14 @@ def test_public_metadata_has_one_exact_elsewindow_identity() -> None:
     assert project["authors"] == project["maintainers"] == [{"name": "kogeler"}]
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
-    assert project["dependencies"] == ["ssh-wrapper==0.1.0"]
+    assert "dependencies" not in project
+    assert "optional-dependencies" not in project
+    runtime = [
+        line
+        for line in (ROOT / "requirements.in").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert runtime == ["ssh-wrapper==0.1.0"]
     assert project["scripts"] == {"elsewindow": "elsewindow.cli:main"}
     assert project["urls"] == {
         "Homepage": "https://kogeler.github.io/elsewindow/",
@@ -64,7 +71,11 @@ def test_linux_python_typing_and_package_data_are_exact() -> None:
     assert document["tool"]["setuptools"]["package-data"] == {
         "elsewindow": ["live-cli.yml", "profiles.yml", "py.typed"]
     }
-    assert document["tool"]["setuptools"]["dynamic"]["version"] == {"file": ".version"}
+    assert document["build-system"]["requires"] == ["setuptools>=84"]
+    assert document["tool"]["setuptools"]["dynamic"] == {
+        "version": {"file": ".version"},
+        "dependencies": {"file": ["requirements.in"]},
+    }
     assert (ROOT / "elsewindow/py.typed").read_bytes() in {b"", b"\n"}
 
 
@@ -90,4 +101,5 @@ def test_sdist_manifest_excludes_nonproduct_trees() -> None:
         "tools",
     ):
         assert f"prune {directory}\n" in manifest
+    assert "include requirements.in\n" in manifest
     assert "recursive-include elsewindow *.py *.yml py.typed" in manifest

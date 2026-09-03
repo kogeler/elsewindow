@@ -17,8 +17,9 @@ HELPER = ROOT / ".github/scripts/version.py"
 def _repository(path: Path, version: str = "1.2.3") -> None:
     (path / ".version").write_text(f"{version}\n", encoding="utf-8")
     (path / "pyproject.toml").write_text(
-        '[project]\ndynamic = ["version"]\n'
-        '[tool.setuptools.dynamic]\nversion = { file = ".version" }\n',
+        '[project]\ndynamic = ["version", "dependencies"]\n'
+        '[tool.setuptools.dynamic]\nversion = { file = ".version" }\n'
+        'dependencies = { file = ["requirements.in"] }\n',
         encoding="utf-8",
     )
     (path / "CHANGELOG.md").write_text(

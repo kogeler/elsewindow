@@ -4,6 +4,7 @@ include LICENSE
 include MANIFEST.in
 include README.md
 include pyproject.toml
+include requirements.in
 recursive-include elsewindow *.py *.yml py.typed
 prune .github
 prune bin

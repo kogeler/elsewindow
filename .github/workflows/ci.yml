@@ -44,9 +44,15 @@ jobs:
           python-version: "3.14"
           cache: pip
           cache-dependency-path: |
+            requirements.in
+            requirements.txt
+            requirements-quality.in
             requirements-quality.txt
+            requirements-test.in
             requirements-test.txt
+            requirements-package.in
             requirements-package.txt
+            requirements-docs.in
             requirements-docs.txt
       - name: Verify host boundary
         run: make doctor
@@ -75,7 +81,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements-test.txt
+          cache-dependency-path: |
+            requirements.in
+            requirements-test.in
+            requirements-test.txt
       - name: Run the complete test suite
         run: make test SYSTEM_PYTHON=python
 
@@ -94,9 +103,12 @@ jobs:
           python-version: "3.14"
           cache: pip
           cache-dependency-path: |
-            requirements-quality.txt
-            requirements-package.txt
+            requirements.in
             requirements.txt
+            requirements-quality.in
+            requirements-quality.txt
+            requirements-package.in
+            requirements-package.txt
       - name: Build once and smoke both Python distributions
         run: make package reproducibility smoke-wheel smoke-sdist SYSTEM_PYTHON=python
       - name: Preserve exact Python release candidates
@@ -132,7 +144,10 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements-standalone.txt
+          cache-dependency-path: |
+            requirements.in
+            requirements-standalone.in
+            requirements-standalone.txt
       - name: Build and smoke the native executable
         run: >-
           make standalone smoke-standalone SYSTEM_PYTHON=python
@@ -180,7 +195,10 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements-quality.txt
+          cache-dependency-path: |
+            requirements.in
+            requirements-quality.in
+            requirements-quality.txt
       - name: Enforce reviewed advisory exceptions
         run: make audit SYSTEM_PYTHON=python
 
@@ -309,6 +327,8 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.in
+            requirements.txt
       - name: Run the packaged-product lifecycle matrix
         run: make live-test SYSTEM_PYTHON=python

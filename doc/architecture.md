@@ -25,9 +25,11 @@ feeds a validated release into the Ubuntu target and Debian client build
 contexts, verifies labels and installed capabilities, and publishes immutable
 image IDs to a private atomic descriptor.
 
-No application code is imported from another project tree. The generated
-runtime and development locks bind the exact published `ssh-wrapper` wheel
-obtained from PyPI.
+No application code is imported from another project tree. Six
+`requirements*.in` files own the exact direct Python versions and their
+generated same-stem locks bind the complete graphs. Published package metadata
+reads the runtime input directly, and every tool input includes it so all
+environments bind the exact published `ssh-wrapper` wheel obtained from PyPI.
 
 The repository launcher validates its hash-lock marker before execution. It
 replaces inherited `PYTHONPATH` with the repository root: `elsewindow` comes
@@ -50,9 +52,10 @@ to the maintained fork and its live matrices.
 
 PyPI receives one normalized pure-Python wheel and one normalized sdist. Both
 contain only the package, metadata, license, README, version source, and build
-inputs required by their format. Clean smoke installs the exact published
-`ssh-wrapper` wheel separately and proves that imports do not resolve from the
-checkout.
+inputs required by their format. The sdist carries `requirements.in` because
+it is an input to dynamic runtime metadata; internal tool inputs remain outside
+the public archive. Clean smoke installs the exact published `ssh-wrapper`
+wheel separately and proves that imports do not resolve from the checkout.
 
 GitHub additionally receives native amd64 and arm64 PyInstaller one-file ELF
 executables. They bundle the Python runtime, `ssh-wrapper`, `.version`,
