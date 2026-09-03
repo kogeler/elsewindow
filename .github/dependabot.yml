@@ -3,9 +3,9 @@
 
 version: 2
 updates:
-  # pyproject.toml owns direct versions and pip-compile owns generated locks.
-  # Keep the coordinated runtime dependency manual and group every other
-  # Python version update into one resolver change.
+  # Native requirements inputs own direct versions and pip-compile owns their
+  # generated locks. Keep the coordinated runtime dependency manual and group
+  # every other Python version update into one resolver change.
   - package-ecosystem: pip
     directory: /
     schedule:
@@ -14,6 +14,8 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 1
+    exclude-paths:
+      - pyproject.toml
     ignore:
       - dependency-name: "ssh-wrapper"
     groups:

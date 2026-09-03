@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools==84.0.0"]
+requires = ["setuptools>=84"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "elsewindow"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "Run one remote Linux GUI application through Xpra over one owned OpenSSH master"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.13,<3.15"
@@ -26,35 +26,6 @@ classifiers = [
     "Topic :: System :: Networking",
     "Typing :: Typed",
 ]
-dependencies = [
-    "ssh-wrapper==0.1.0",
-]
-
-[project.optional-dependencies]
-quality = [
-    "bandit[toml]==1.9.4",
-    "mypy==2.3.1",
-    "pip-audit==2.10.1",
-    "pip-licenses==5.5.5",
-    "ruff==0.16.5",
-]
-test = [
-    "pytest==9.1.1",
-    "pytest-asyncio==1.4.0",
-    "pytest-cov==7.1.0",
-    "pytest-xdist==3.8.0",
-]
-package = [
-    "build==1.6.0",
-    "setuptools==84.0.0",
-    "wheel==0.48.0",
-]
-standalone = [
-    "pyinstaller==6.22.2",
-]
-docs = [
-    "mkdocs-material==9.7.7",
-]
 
 [project.scripts]
 elsewindow = "elsewindow.cli:main"
@@ -74,6 +45,7 @@ elsewindow = ["live-cli.yml", "profiles.yml", "py.typed"]
 
 [tool.setuptools.dynamic]
 version = { file = ".version" }
+dependencies = { file = ["requirements.in"] }
 
 [tool.mypy]
 files = ["elsewindow"]

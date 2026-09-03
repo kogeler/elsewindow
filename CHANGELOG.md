@@ -4,6 +4,18 @@
 
 All notable changes to Elsewindow are documented here.
 
+## Unreleased
+
+### Changed
+
+- Moved all exact direct Python versions to six native
+  `requirements*.in`/`requirements*.txt` pip-compile pairs so Dependabot can
+  update each complete graph instead of treating `pyproject.toml` as a plain
+  requirements manifest.
+- Aligned both local lock resolver stages with Dependabot's pip and pip-tools
+  pair, and made published runtime metadata derive from `requirements.in`
+  without a second version authority.
+
 ## [0.1.0] - 2026-08-30
 
 ### Added

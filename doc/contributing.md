@@ -21,6 +21,10 @@ container acceptance target from [Development](development.md). Changes to
 Xpra arguments require a fresh comparison with both canonical fork YAML files
 and tests of the complete assembled argv.
 
+Direct Python pins belong in the matching `requirements*.in` file. Each tool
+input extends `requirements.in`; run `make lock` and review all six generated
+`.txt` locks after changing a direct dependency. Do not hand-edit a lock.
+
 Review for these properties:
 
 - no secondary authentication or reconnect path;

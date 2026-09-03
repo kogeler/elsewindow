@@ -26,6 +26,7 @@ ROOT_FILES = (
     "MANIFEST.in",
     "README.md",
     "pyproject.toml",
+    "requirements.in",
 )
 
 

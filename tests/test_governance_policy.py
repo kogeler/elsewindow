@@ -15,6 +15,34 @@ ACTION = re.compile(
     r"^\s*uses:\s*([^@\s]+)@([0-9a-f]{40})\s+#\s+(v[0-9][^\s]*)$",
     re.MULTILINE,
 )
+DIRECT_REQUIREMENT = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)"
+    r"(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?==([^\s;]+)$"
+)
+
+
+def _normalize_package(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).casefold()
+
+
+def _input_requirements(path: Path, *, extends_runtime: bool) -> dict[str, str]:
+    direct: dict[str, str] = {}
+    includes: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        requirement = line.strip()
+        if not requirement or requirement.startswith("#"):
+            continue
+        if requirement.startswith("-r "):
+            includes.append(requirement.removeprefix("-r "))
+            continue
+        match = DIRECT_REQUIREMENT.fullmatch(requirement)
+        assert match is not None, (path, requirement)
+        name = _normalize_package(match.group(1))
+        assert name not in direct
+        direct[name] = match.group(2)
+    assert direct
+    assert includes == (["requirements.in"] if extends_runtime else [])
+    return direct
 
 
 def test_governance_files_are_project_local_and_complete() -> None:
@@ -68,6 +96,15 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "standalone-amd64" not in ci
     assert "standalone-${{ matrix.architecture }}" in ci
     assert "persist-credentials: false" in ci
+    for dependency_input in (
+        "requirements.in",
+        "requirements-quality.in",
+        "requirements-test.in",
+        "requirements-package.in",
+        "requirements-standalone.in",
+        "requirements-docs.in",
+    ):
+        assert dependency_input in ci
     submission = (WORKFLOWS / "dependency-submission.yml").read_text(encoding="utf-8")
     assert submission.count("contents: write") == 1
     assert "pull_request:" not in submission
@@ -78,6 +115,8 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "actions/upload-pages-artifact@" in pages
     assert "actions/deploy-pages@" in pages
     assert "if: github.event_name == 'push'" in pages
+    assert "requirements.in" in pages
+    assert "requirements-docs.in" in pages
     release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
     assert release.count("contents: write") == 1
     assert release.count("id-token: write") == 1
@@ -128,6 +167,16 @@ def test_make_exposes_the_complete_governance_surface() -> None:
     assert "tools/verify_standalone.py" in makefile
     assert "--find-links" not in makefile
     assert "--rebuild" in makefile
+    assert "--extra=" not in makefile
+    for dependency_input in (
+        "requirements.in",
+        "requirements-quality.in",
+        "requirements-test.in",
+        "requirements-package.in",
+        "requirements-standalone.in",
+        "requirements-docs.in",
+    ):
+        assert dependency_input in makefile
     assert "pip download --quiet --require-hashes" in makefile
     assert "import importlib.metadata, ssh_wrapper" in makefile
     assert "import importlib.metadata, pip, ssh_wrapper" in makefile
@@ -222,8 +271,15 @@ def test_dependabot_groups_ecosystems_and_keeps_runtime_manual() -> None:
     assert dependabot.count("open-pull-requests-limit: 1") == 2
     assert dependabot.count('          - "*"') == 2
     assert 'dependency-name: "ssh-wrapper"' in dependabot
+    assert "exclude-paths:\n      - pyproject.toml" in dependabot
     assert "python-dependencies:" in dependabot
     assert "github-actions:" in dependabot
+
+    governance = (ROOT / "containers/governance/Containerfile").read_text(
+        encoding="utf-8"
+    )
+    assert governance.count("pip==26.1.1") == 2
+    assert governance.count("pip-tools==7.5.3") == 2
 
 
 def test_audit_starts_with_no_reviewed_exceptions() -> None:
@@ -235,7 +291,24 @@ def test_audit_starts_with_no_reviewed_exceptions() -> None:
 
 def test_dependency_audiences_have_exact_direct_owners() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    audiences = project["project"]["optional-dependencies"]
+    assert project["project"]["dynamic"] == ["version", "dependencies"]
+    assert "dependencies" not in project["project"]
+    assert "optional-dependencies" not in project["project"]
+    assert project["tool"]["setuptools"]["dynamic"]["dependencies"] == {
+        "file": ["requirements.in"]
+    }
+    expected_inputs = {
+        "requirements.in",
+        "requirements-quality.in",
+        "requirements-test.in",
+        "requirements-package.in",
+        "requirements-standalone.in",
+        "requirements-docs.in",
+    }
+    assert {path.name for path in ROOT.glob("requirements*.in")} == expected_inputs
+
+    runtime = _input_requirements(ROOT / "requirements.in", extends_runtime=False)
+    assert runtime == {"ssh-wrapper": "0.1.0"}
     expected = {
         "quality": {"bandit", "mypy", "pip-audit", "pip-licenses", "ruff"},
         "test": {"pytest", "pytest-asyncio", "pytest-cov", "pytest-xdist"},
@@ -243,16 +316,24 @@ def test_dependency_audiences_have_exact_direct_owners() -> None:
         "standalone": {"pyinstaller"},
         "docs": {"mkdocs-material"},
     }
-    assert set(audiences) == set(expected)
-    flattened = [requirement for values in audiences.values() for requirement in values]
+    audiences = {
+        audience: _input_requirements(
+            ROOT / f"requirements-{audience}.in", extends_runtime=True
+        )
+        for audience in expected
+    }
+    flattened = [name for requirements in audiences.values() for name in requirements]
     assert len(flattened) == len(set(flattened))
     for audience, requirements in audiences.items():
-        assert all(requirement.count("==") == 1 for requirement in requirements)
-        names = {
-            requirement.partition("==")[0].partition("[")[0]
-            for requirement in requirements
-        }
-        assert names == expected[audience]
+        assert set(requirements) == expected[audience]
+
+    for input_name in expected_inputs:
+        lock_name = input_name.removesuffix(".in") + ".txt"
+        header = "\n".join(
+            (ROOT / lock_name).read_text(encoding="utf-8").splitlines()[:8]
+        )
+        assert input_name in header
+        assert "pyproject.toml" not in header
 
 
 def test_distribution_contract_includes_runtime_yaml_and_console_entry() -> None:
