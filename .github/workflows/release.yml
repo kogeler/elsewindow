@@ -2,6 +2,8 @@
 
 name: Release
 
+# Publication is external-state driven, not change-path driven. Every main push
+# performs only the state inspection when the current version is already exact.
 on:
   push:
     branches:
@@ -22,6 +24,7 @@ jobs:
     outputs:
       github_required: ${{ steps.check.outputs.github_required }}
       pypi_required: ${{ steps.check.outputs.pypi_required }}
+      release_required: ${{ steps.check.outputs.release_required }}
     steps:
       - name: Inspect both publication targets independently
         id: check
@@ -40,9 +43,9 @@ jobs:
             ) {
               throw new Error(`Refusing release inspection for ${repository}/${context.ref}`);
             }
-            const read = async (path) => {
+            const read = async (path, ref = context.sha) => {
               const response = await github.rest.repos.getContent({
-                ...context.repo, path, ref: context.sha,
+                ...context.repo, path, ref,
               });
               if (
                 Array.isArray(response.data) || response.data.type !== "file" ||
@@ -60,23 +63,26 @@ jobs:
               throw new Error(".version is not a stable semantic version");
             }
             const tagName = `v${version}`;
-            const changelog = await read("CHANGELOG.md");
-            const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const heading = new RegExp(
-              `^## \\[${escaped}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$`, "gm",
-            );
-            const headings = [...changelog.matchAll(heading)];
-            if (headings.length !== 1) {
-              throw new Error(`Expected one dated changelog section for ${version}`);
-            }
-            const remainder = changelog.slice(headings[0].index + headings[0][0].length);
-            const next = remainder.search(/^## /m);
-            const section = remainder.slice(0, next < 0 ? undefined : next).trim();
-            if (!section || !/^- /m.test(section)) {
-              throw new Error(`Changelog section ${version} has no release entries`);
-            }
-            const notes = `${section}\n\nFull changelog: ` +
-              `https://github.com/${repository}/blob/${tagName}/CHANGELOG.md\n`;
+            const releaseNotes = (changelog) => {
+              const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const heading = new RegExp(
+                `^## \\[${escaped}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$`, "gm",
+              );
+              const headings = [...changelog.matchAll(heading)];
+              if (headings.length !== 1) {
+                throw new Error(`Expected one dated changelog section for ${version}`);
+              }
+              const remainder = changelog.slice(
+                headings[0].index + headings[0][0].length,
+              );
+              const next = remainder.search(/^## /m);
+              const section = remainder.slice(0, next < 0 ? undefined : next).trim();
+              if (!section || !/^- /m.test(section)) {
+                throw new Error(`Changelog section ${version} has no release entries`);
+              }
+              return `${section}\n\nFull changelog: ` +
+                `https://github.com/${repository}/blob/${tagName}/CHANGELOG.md\n`;
+            };
             const pythonTypes = new Map([
               [`elsewindow-${version}-py3-none-any.whl`, "bdist_wheel"],
               [`elsewindow-${version}.tar.gz`, "sdist"],
@@ -120,17 +126,29 @@ jobs:
             }
             const release = matches[0] || null;
             const tagCommit = await taggedCommit();
-            if (tagCommit && tagCommit !== context.sha) {
+            const published = Boolean(release && !release.draft);
+            if (!published && tagCommit && tagCommit !== context.sha) {
               throw new Error(`Tag ${tagName} points to ${tagCommit}, not ${context.sha}`);
             }
             if (!release && tagCommit) {
               throw new Error(`Tag ${tagName} exists without its release`);
             }
+            if (published && !tagCommit) {
+              throw new Error(`Published release ${tagName} has no tag`);
+            }
+            const releaseCommit = published ? tagCommit : context.sha;
+            const releaseVersion = (await read(".version", releaseCommit)).trim();
+            if (releaseVersion !== version) {
+              throw new Error(
+                `Release source ${releaseCommit} contains .version ${releaseVersion}`,
+              );
+            }
+            const notes = releaseNotes(await read("CHANGELOG.md", releaseCommit));
             const githubFiles = new Map();
             if (release) {
               if (
                 release.name !== tagName || release.body !== notes ||
-                release.target_commitish !== context.sha || release.prerelease
+                release.target_commitish !== releaseCommit || release.prerelease
               ) {
                 throw new Error(`GitHub release ${tagName} has conflicting metadata`);
               }
@@ -235,14 +253,19 @@ jobs:
               }
               githubRequired = false;
             }
+            const releaseRequired = pypiRequired || githubRequired;
             core.setOutput("github_required", String(githubRequired));
             core.setOutput("pypi_required", String(pypiRequired));
+            core.setOutput("release_required", String(releaseRequired));
             core.notice(
-              `Publication state: PyPI required=${pypiRequired}, GitHub required=${githubRequired}`,
+              `Publication state: release required=${releaseRequired}, ` +
+              `PyPI required=${pypiRequired}, GitHub required=${githubRequired}`,
             );
 
   ci:
     name: Reusable CI gate
+    needs: release-state
+    if: needs.release-state.outputs.release_required == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       base_ref: ${{ github.event.before }}

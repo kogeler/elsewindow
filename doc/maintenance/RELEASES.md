@@ -1,9 +1,22 @@
 # Release Contract
 
-`.version` is the only human-maintained stable semantic version. Set it once,
-add one dated `## [X.Y.Z] - YYYY-MM-DD` changelog section, and run
+`.version` is the only human-maintained stable semantic version. After a
+release, leave it at the published value while ordinary changes accumulate in
+the `## Unreleased` section of `CHANGELOG.md`. A pull request does not imply a
+new release, and any number of merged pull requests may share that unreleased
+section without changing package metadata or invoking publication.
+
+When a maintainer deliberately prepares a release, advance `.version` once,
+move the accumulated notes into one dated `## [X.Y.Z] - YYYY-MM-DD` section,
+retain the empty `## Unreleased` heading for later work, and run
 `make version-check`. Dynamic package metadata, `elsewindow.__version__`, the
 `vX.Y.Z` tag, release name, and generated notes all resolve from that value.
+
+When a pull request changes `CHANGELOG.md`, repository automation copies its
+newest populated level-two section into one managed block in the pull-request
+body. This means populated `Unreleased` notes are shown even though `.version`
+is unchanged. Manual text outside the block remains contributor-owned;
+malformed or duplicate markers fail closed.
 
 The release inventory is exact:
 
@@ -18,12 +31,17 @@ produce byte-identical normalized wheel and sdist bytes. Each native
 PyInstaller build instead carries checked provenance because the tool does not
 promise a portable byte-reproducible one-file executable.
 
-On a direct `main` push, release state is inspected independently at PyPI and
-GitHub. Existing project, version, tag, target commit, notes, filename, type,
-size, SHA-256, yanked state, executable inventory, and checksum bytes must all
-match. A complete match is a no-op. An exact draft may resume by uploading
-only missing artifacts. Unexpected, duplicate, incomplete published, moved-tag,
-or byte-conflicting state fails without deletion or overwrite.
+On every direct `main` push, the state job first inspects PyPI and GitHub
+independently. Release need is determined by that external state, never merely
+by whether `.version` changed. Existing project, version, tag, tagged source
+commit, notes, filename, type, size, SHA-256, yanked state, executable
+inventory, and checksum bytes must all match. A complete published match is a
+no-op even when `main` and `Unreleased` have advanced: the reusable release CI
+and both publication jobs are skipped, and metadata is checked against the
+immutable tagged source instead of the new head. An exact draft may resume by
+uploading only missing artifacts. Unexpected, duplicate, incomplete
+published, moved-tag, or byte-conflicting state fails without deletion or
+overwrite.
 
 PyPI publication uses the pinned official action, one GitHub Environment named
 `pypi`, and job-scoped `id-token: write`. No API token or password is accepted.

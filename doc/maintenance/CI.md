@@ -16,9 +16,12 @@ is `contents: read`.
   `ubuntu-26.04-arm` arm64 runners;
 - exact-lock audit and same-repository pull-request dependency review;
 - Python and Actions CodeQL;
-- exact version progression with unpublished-version recovery;
+- exact version validation, progression for a new or unpublished version, and
+  ordinary maintenance changes that retain an already published current
+  version while `Unreleased` notes accumulate;
 - Debian 13 and Ubuntu 26.04 installer acceptance using only the newest
-  currently published maintained-fork package release;
+  currently published maintained-fork package release and the job-scoped
+  read token for rate-isolated API access inside its disposable guests;
 - one release-backed SSH/Xpra lifecycle gate using a clean-installed wheel.
 
 The two architecture jobs build their executable natively; no cross-labeled
@@ -29,7 +32,22 @@ or foreign-platform artifact is accepted. Their labels come from the public
 runs only on trusted direct `main` changes. Its one job receives
 `contents: write` and submits exactly the six validated lock manifests.
 [`release.yml`](../../.github/workflows/release.yml) grants OIDC only to the
-PyPI job and `contents: write` only to the GitHub publication job.
+PyPI job and `contents: write` only to the GitHub publication job. Its reusable
+CI gate runs only when exact publication-state inspection finds work for the
+version currently stored in `.version`; an already complete release skips the
+gate regardless of which files changed in the triggering push. The workflow
+therefore performs the minimal external-state inspection on every direct
+`main` push instead of treating a `.version` diff, an ordinary merge, or a
+populated `Unreleased` section as release intent.
+
+[`pr-body.yml`](../../.github/workflows/pr-body.yml) runs when a pull request
+changes `CHANGELOG.md`. Its `pull_request_target` boundary checks out only
+trusted default-branch code and reads the exact head changelog through the
+GitHub API as bounded inert data. A populated `## Unreleased` section is copied
+into one marker-delimited PR-body block without requiring a new version.
+Manual text outside the block is preserved, and a body changed concurrently is
+never overwritten. This is the only workflow granted `pull-requests: write`;
+it never checks out or executes pull-request head code.
 
 [`pages.yml`](../../.github/workflows/pages.yml) renders the current
 repository documentation on pull requests and direct `main` pushes. Its build

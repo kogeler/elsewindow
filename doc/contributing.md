@@ -25,6 +25,24 @@ Direct Python pins belong in the matching `requirements*.in` file. Each tool
 input extends `requirements.in`; run `make lock` and review all six generated
 `.txt` locks after changing a direct dependency. Do not hand-edit a lock.
 
+## Changelog and release intent
+
+Add release-worthy changes to the existing `## Unreleased` section in
+[`CHANGELOG.md`](../CHANGELOG.md). Keep `.version` unchanged in an ordinary
+pull request: multiple changes and multiple merged pull requests may
+accumulate under `Unreleased` before a maintainer deliberately prepares a
+release.
+
+Changing `CHANGELOG.md` triggers the dedicated PR metadata workflow. It copies
+the newest populated level-two section—normally `## Unreleased`, even when
+`.version` did not change—into a marker-delimited block in the pull-request
+body. Manual text outside that block is preserved. Do not edit or duplicate
+the marker lines; update the changelog or write outside the managed block.
+
+Only a deliberate release change advances `.version` and moves the accumulated
+notes into one matching dated `## [X.Y.Z] - YYYY-MM-DD` section. Follow the
+[release contract](maintenance/RELEASES.md) for that operation.
+
 Review for these properties:
 
 - no secondary authentication or reconnect path;

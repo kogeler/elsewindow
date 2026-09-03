@@ -50,6 +50,7 @@ def test_governance_files_are_project_local_and_complete() -> None:
         "ci.yml",
         "dependency-submission.yml",
         "pages.yml",
+        "pr-body.yml",
         "release.yml",
     }
     for name in (
@@ -64,6 +65,7 @@ def test_governance_files_are_project_local_and_complete() -> None:
         "dependency_audit.py",
         "dependency_snapshot.py",
         "lock_validation.py",
+        "pr_body.py",
         "release_inventory.py",
         "verify_pypi_release.py",
         "version.py",
@@ -93,6 +95,9 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "${{ matrix.python }}" in ci
     assert "Exact version progression" in ci
     assert "unpublished_base_version" in ci
+    assert "published_current_version" in ci
+    version_job = ci.split("\n  version:", 1)[1].split("\n  codeql:", 1)[0]
+    assert 'elif [[ "$PUBLISHED_CURRENT_VERSION" != "true" ]]' in version_job
     assert "standalone-amd64" not in ci
     assert "standalone-${{ matrix.architecture }}" in ci
     assert "persist-credentials: false" in ci
@@ -122,6 +127,14 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert release.count("id-token: write") == 1
     assert "uses: ./.github/workflows/ci.yml" in release
     assert "base_ref: ${{ github.event.before }}" in release
+    release_ci = release.split("\n  ci:", 1)[1].split("\n  publish-pypi:", 1)[0]
+    assert "needs: release-state" in release_ci
+    assert "if: needs.release-state.outputs.release_required == 'true'" in release_ci
+    assert "release_required: ${{ steps.check.outputs.release_required }}" in release
+    assert 'core.setOutput("release_required", String(releaseRequired))' in release
+    assert "const releaseCommit = published ? tagCommit : context.sha;" in release
+    assert 'read("CHANGELOG.md", releaseCommit)' in release
+    assert "paths:" not in release.split("\npermissions:", 1)[0]
     assert "pypa/gh-action-pypi-publish@" in release
     assert "skip-existing" not in release
     assert "password:" not in release
@@ -129,6 +142,41 @@ def test_workflow_actions_are_sha_pinned_and_permissions_are_narrow() -> None:
     assert "elsewindow-linux-amd64" in release
     assert "elsewindow-linux-arm64" in release
     assert "SHA256SUMS.txt" in release
+    installer = ci.split("\n  installer:", 1)[1].split("\n  live:", 1)[0]
+    assert "GITHUB_TOKEN: ${{ github.token }}" in installer
+
+
+def test_pr_body_metadata_uses_trusted_code_and_bounded_head_data() -> None:
+    pr_body = (WORKFLOWS / "pr-body.yml").read_text(encoding="utf-8")
+    target_workflows = [
+        path.name
+        for path in sorted(WORKFLOWS.glob("*.yml"))
+        if "pull_request_target:" in path.read_text(encoding="utf-8")
+    ]
+    write_grants = sum(
+        path.read_text(encoding="utf-8").count("pull-requests: write")
+        for path in WORKFLOWS.glob("*.yml")
+    )
+
+    assert target_workflows == ["pr-body.yml"]
+    assert write_grants == 1
+    assert "branches:\n      - main" in pr_body
+    assert "paths:\n      - CHANGELOG.md" in pr_body
+    assert "opened\n      - reopened\n      - synchronize" in pr_body
+    assert "EXPECTED_REPOSITORY: kogeler/elsewindow" in pr_body
+    assert "github.rest.repos.getContent" in pr_body
+    assert 'path: "CHANGELOG.md"' in pr_body
+    assert "ref: headSha" in pr_body
+    assert 'file.encoding !== "base64"' in pr_body
+    assert "changelog.byteLength > 1_000_000" in pr_body
+    assert "python .github/scripts/pr_body.py" in pr_body
+    assert "github.rest.pulls.update" in pr_body
+    assert "Pull-request body changed; refusing concurrent overwrite" in pr_body
+    checkout = pr_body.split("- name: Check out trusted default branch", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+    assert "persist-credentials: false" in checkout
+    assert "ref:" not in checkout
 
 
 def test_make_exposes_the_complete_governance_surface() -> None:

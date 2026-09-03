@@ -202,6 +202,8 @@ jobs:
       - name: Enforce reviewed advisory exceptions
         run: make audit SYSTEM_PYTHON=python
 
+  # Ordinary changes may retain a published version while Unreleased accumulates.
+  # An unpublished current version still has to advance beyond published history.
   version:
     name: Exact version progression
     runs-on: ubuntu-26.04
@@ -242,13 +244,18 @@ jobs:
               ).toString("utf8").trim();
             }
             if (!stable.test(base)) throw new Error("base version is not stable X.Y.Z");
+            let publishedCurrent = false;
             let unpublished = "";
             try {
-              await github.rest.repos.getReleaseByTag({
+              const currentRelease = await github.rest.repos.getReleaseByTag({
                 ...context.repo, tag: `v${current}`,
               });
+              publishedCurrent = !currentRelease.data.draft &&
+                !currentRelease.data.prerelease;
             } catch (error) {
               if (error.status !== 404) throw error;
+            }
+            if (!publishedCurrent) {
               unpublished = "0.0.0";
               try {
                 const latest = await github.rest.repos.getLatestRelease({ ...context.repo });
@@ -261,15 +268,20 @@ jobs:
               }
             }
             core.setOutput("base_version", base);
+            core.setOutput("published_current_version", String(publishedCurrent));
             core.setOutput("unpublished_base_version", unpublished);
       - name: Compare exact base and proposed versions
         env:
           BASE_VERSION: ${{ steps.baseline.outputs.base_version }}
+          PUBLISHED_CURRENT_VERSION: ${{ steps.baseline.outputs.published_current_version }}
           UNPUBLISHED_BASE_VERSION: ${{ steps.baseline.outputs.unpublished_base_version }}
         run: |
-          args="--base-version $BASE_VERSION"
-          if [[ "$(tr -d '\r\n' < .version)" == "$BASE_VERSION" && -n "$UNPUBLISHED_BASE_VERSION" ]]; then
-            args+=" --unpublished-base-version $UNPUBLISHED_BASE_VERSION"
+          current_version="$(tr -d '\r\n' < .version)"
+          args=""
+          if [[ "$current_version" != "$BASE_VERSION" ]]; then
+            args="--base-version $BASE_VERSION"
+          elif [[ "$PUBLISHED_CURRENT_VERSION" != "true" ]]; then
+            args="--base-version $BASE_VERSION --unpublished-base-version $UNPUBLISHED_BASE_VERSION"
           fi
           make version-check SYSTEM_PYTHON=python VERSION_ARGS="$args"
 
@@ -311,6 +323,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Run both disposable installer guests
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: make xpra-installer-test
 
   live:
