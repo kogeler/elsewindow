@@ -25,16 +25,19 @@ application's source tree.
   installer images.
 - `tests/` contains unit, policy, package, installer, and the single automatic
   ephemeral-key live topology.
-- `.github/workflows/` contains active root-native CI, documentation,
-  dependency submission, and release automation.
-- `.github/scripts/` owns standard-library dependency, version, and release
-  policy. `doc/maintenance/` owns maintainer procedures.
+- `.github/workflows/` contains active root-native CI, documentation, PR
+  metadata, dependency submission, and release automation.
+- `.github/scripts/` owns standard-library dependency, changelog-to-PR,
+  version, and release policy. `doc/maintenance/` owns maintainer procedures.
 - `pyproject.toml` owns package metadata, typing, security scanning, and
   coverage policy. Published runtime metadata reads `requirements.in`
   dynamically and must not duplicate its versions.
 - `.version` is the only human-maintained version. Dynamic package metadata,
   `elsewindow.__version__`, the changelog section, `vX.Y.Z` tag, release name,
   and notes must resolve from it.
+- Ordinary pull requests keep the published `.version` and accumulate
+  release-worthy entries under `CHANGELOG.md` `## Unreleased`. Only deliberate
+  release preparation advances the version and creates its dated section.
 - `requirements.in` and the five `requirements-*.in` files own exact direct
   dependency versions and are the native Dependabot inputs. Their matching
   `requirements*.txt` files are generated hash locks. Never hand-edit a lock.
@@ -104,6 +107,14 @@ retired standalone repository identity.
 Update implementation, focused tests, and the owning user, architecture,
 security, development, or maintenance documentation together. Run the smallest
 real test immediately after each atomic change.
+
+The privileged PR metadata workflow executes only trusted default-branch code.
+Treat the pull-request head `CHANGELOG.md` as bounded inert data and replace
+only the single marker-delimited body section. A populated `## Unreleased`
+section must be rendered without requiring a `.version` change. Release
+automation must decide from exact external publication state: an existing
+complete release for the current version skips reusable release CI and all
+publication jobs even as unreleased changes accumulate.
 
 Every local gate reads the current filesystem bytes, including modified and
 untracked maintained files. Never select inputs from the Git index, require a

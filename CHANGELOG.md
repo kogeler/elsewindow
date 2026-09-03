@@ -18,6 +18,9 @@ All notable changes to Elsewindow are documented here.
 - Made an exact existing release suppress the reusable release CI and both
   publication jobs, while ordinary CI accepts maintenance at an already
   published version and authenticates installer acceptance API requests.
+- Added trusted-base PR metadata automation that mirrors a populated
+  `Unreleased` section without requiring a version change, preserving manual
+  PR text while release-worthy changes accumulate across merges.
 
 ## [0.1.0] - 2026-08-30
 

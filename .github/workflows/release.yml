@@ -2,6 +2,8 @@
 
 name: Release
 
+# Publication is external-state driven, not change-path driven. Every main push
+# performs only the state inspection when the current version is already exact.
 on:
   push:
     branches:

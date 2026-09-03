@@ -202,6 +202,8 @@ jobs:
       - name: Enforce reviewed advisory exceptions
         run: make audit SYSTEM_PYTHON=python
 
+  # Ordinary changes may retain a published version while Unreleased accumulates.
+  # An unpublished current version still has to advance beyond published history.
   version:
     name: Exact version progression
     runs-on: ubuntu-26.04
