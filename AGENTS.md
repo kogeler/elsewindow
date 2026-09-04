@@ -11,7 +11,8 @@ application's source tree.
   `doc/`, `doc/site/`, and `tools/audit_docs_site.py` own the rendered site and
   its offline publication audit.
 - `elsewindow/` is the typed installed package. `live-cli.yml` and
-  `profiles.yml` are package data and the sole Xpra option authority.
+  `profiles.yml` are package data and the sole mirrored Xpra profile authority;
+  `session.py` owns the explicit project security and clipboard policy options.
 - `bin/elsewindow` is the repository launcher; `python -m elsewindow` and the
   installed console command are the other supported entry routes.
 - `tools/install_xpra_release.py` is the standalone verified Xpra package
@@ -47,7 +48,9 @@ application's source tree.
 - Perform one deliberate OpenSSH authentication and use only channels backed
   by the owned master. Never reconnect after master loss.
 - Open no forwarding or Xpra TCP listener. Disable automatic reconnection and
-  auxiliary Xpra data and device features.
+  every auxiliary Xpra data and device feature except the reviewed clipboard
+  policy. Apply `off`, `to-server`, or `both` explicitly to both peers and
+  default to `both`.
 - Start the remote server and application in one heartbeat-supervised process
   group. Cleanup targets only recorded owned resources.
 - Before changing an Xpra argument, compare `elsewindow/live-cli.yml` and

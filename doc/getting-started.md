@@ -36,8 +36,8 @@ DEBs and their dependencies with APT rather than `dpkg -i`.
 After the first release, use either normal pip or pipx installation:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.1.0"
-# or: pipx install "elsewindow==0.1.0"
+python3.14 -m pip install "elsewindow==0.1.1"
+# or: pipx install "elsewindow==0.1.1"
 elsewindow --help
 elsewindow --diagnose
 ```
@@ -83,15 +83,21 @@ elsewindow --host host.example --user desktop-user -- /usr/bin/xterm
 ```
 
 Application arguments begin after `--`. To request the reviewed adaptive-alpha
-H.264 profile on the default gigabit LAN network profile:
+H.264 profile on the default gigabit LAN network profile while allowing only
+local-to-remote clipboard synchronization:
 
 ```bash
 elsewindow \
   --ssh-alias agents-a \
   --encoding-profile h264 \
   --network-profile gigabit_lan \
+  --clipboard=to-server \
   -- /opt/application/bin/application
 ```
+
+Clipboard synchronization defaults to bidirectional `both`. Select
+`--clipboard=off` to disable it or `--clipboard=to-server` to prevent the
+remote side from synchronizing data back to the local clipboard.
 
 See [the Xpra guide](xpra.md) for all profiles, options, failure codes, and
 ownership limits.

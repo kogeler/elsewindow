@@ -9,8 +9,17 @@ One invocation owns one foreground OpenSSH ControlMaster. Every secondary
 operation requires its mux socket and is configured so it cannot authenticate
 or reconnect independently. OpenSSH forwarding, agent sharing, X11 forwarding,
 and configured local or remote commands are disabled. Xpra TCP, HTML, SSH
-upgrade, clipboard, audio, webcam, printing, file transfer, URL opening,
-notifications, and automatic reconnection are disabled.
+upgrade, audio, webcam, printing, file transfer, URL opening, notifications,
+and automatic reconnection are disabled.
+
+Clipboard synchronization is the only auxiliary data channel that can be
+enabled. The default `--clipboard=both` policy explicitly enables it on the
+local client and remote server in both directions. `--clipboard=to-server`
+permits only local client to remote server synchronization, and
+`--clipboard=off` disables the subsystem on both peers. Clipboard data is
+visible to the trusted remote account and application; use a narrower policy
+when the local clipboard may contain data that should not cross that trust
+boundary.
 
 The remote server and application run in one heartbeat-supervised process
 group. Normal detach, cancellation, a signal, lease expiry, or master loss

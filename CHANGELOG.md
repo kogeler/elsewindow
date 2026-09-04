@@ -6,8 +6,14 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+## [0.1.1] - 2026-09-04
+
 ### Changed
 
+- Enabled bidirectional Xpra clipboard synchronization by default, with
+  explicit `off`, `to-server`, and `both` policies applied to both peers.
+- Synchronized the mirrored Xpra keyboard diagnostics with the current
+  maintained-fork configuration.
 - Moved all exact direct Python versions to six native
   `requirements*.in`/`requirements*.txt` pip-compile pairs so Dependabot can
   update each complete graph instead of treating `pyproject.toml` as a plain

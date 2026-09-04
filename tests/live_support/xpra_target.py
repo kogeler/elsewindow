@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from elsewindow.config import DEFAULT_CLIPBOARD_POLICY
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE
 from elsewindow.session import build_server_argv
 
@@ -187,6 +188,7 @@ def start_unrelated_resources(resources: LiveResources, target: str) -> None:
         ("/bin/sleep", "3600"),
         "elsewindow-unrelated",
         DEFAULT_ENCODING_PROFILE,
+        DEFAULT_CLIPBOARD_POLICY,
     )
     checked(
         [

@@ -7,7 +7,7 @@ cleans only the server, application process group, sockets, and runtime state
 created by that invocation.
 
 The application renders through the remote Wayland compositor and remote GPU.
-Only Xpra picture, input, and control traffic crosses SSH.
+Only Xpra picture, input, clipboard, and control traffic crosses SSH.
 
 ## Install And Run
 
@@ -16,8 +16,8 @@ The Python distribution requires Linux, CPython 3.13 or 3.14, OpenSSH,
 systems. Install with pip or pipx after the first release:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.1.0"
-# or: pipx install "elsewindow==0.1.0"
+python3.14 -m pip install "elsewindow==0.1.1"
+# or: pipx install "elsewindow==0.1.1"
 elsewindow --ssh-alias agents-a -- xterm
 ```
 
@@ -48,9 +48,12 @@ elsewindow \
   -- /opt/application/bin/application
 ```
 
-The default encoding and network profiles are `rgb` and `gigabit_lan`.
-Production arguments come exclusively from the reviewed YAML mirrors shipped
-inside the Python package. See [the Xpra guide](doc/xpra.md) for profile,
+The default encoding, network, and clipboard policies are `rgb`,
+`gigabit_lan`, and bidirectional `both`. Use `--clipboard=off` to disable
+clipboard synchronization or `--clipboard=to-server` to allow only local to
+remote transfers. Reviewed profile arguments come from the YAML mirrors
+shipped inside the Python package; the session assembler adds the selected
+clipboard and security policy. See [the Xpra guide](doc/xpra.md) for profile,
 hardware, application, and lifecycle details.
 
 ## Installing The Maintained Xpra Build

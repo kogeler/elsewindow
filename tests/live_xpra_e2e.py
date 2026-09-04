@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from ssh_wrapper.connection import ConnectionSpec
 from ssh_wrapper.errors import SSHError
 
-from elsewindow.config import XpraConfig
+from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE, load_network_profiles
 from elsewindow.session import XpraSession, build_xpra_command_argv
 from tests.live_support.process import TARGET_ALIAS
@@ -69,6 +69,7 @@ def session_config(arguments: argparse.Namespace) -> XpraConfig:
         application=(REMOTE_APP, marker, OWNED_TITLE),
         encoding_profile=DEFAULT_ENCODING_PROFILE,
         network_profile=load_network_profiles()[0],
+        clipboard=DEFAULT_CLIPBOARD_POLICY,
         connect_timeout=30,
         ready_timeout=45,
         probe_timeout=8,

@@ -19,7 +19,7 @@ from ssh_wrapper.connection import OpenSSHMaster, SSHMasterSettings
 from ssh_wrapper.errors import SSHError
 from ssh_wrapper.remote_process import BoundedTail, OwnedRemoteProcess
 
-from .config import XpraConfig
+from .config import SUPPORTED_CLIPBOARD_POLICIES, XpraConfig
 from .live_config import (
     command_cli_options,
     network_profile,
@@ -76,7 +76,6 @@ SERVER_SECURITY_OPTIONS = (
 )
 CLIENT_SECURITY_OPTIONS = (
     "--title=@title@",
-    "--clipboard=no",
     "--remote-logging=no",
     "--tray=no",
     "--splash=no",
@@ -88,6 +87,15 @@ CLIENT_SECURITY_OPTIONS = (
     "--open-url=no",
     "--notifications=no",
 )
+
+
+def clipboard_options(policy: str) -> tuple[str, ...]:
+    """Return the explicit Xpra options for one public clipboard policy."""
+    if policy not in SUPPORTED_CLIPBOARD_POLICIES:
+        raise RuntimeError("the clipboard policy is invalid")
+    if policy == "off":
+        return ("--clipboard=no",)
+    return ("--clipboard=yes", f"--clipboard-direction={policy}")
 
 
 def _translate_server_runtime_options(
@@ -200,6 +208,7 @@ def build_server_argv(
     application: tuple[str, ...],
     session_name: str,
     encoding_profile: str,
+    clipboard: str,
 ) -> tuple[str, ...]:
     """Build one production Wayland server command from the mirrored profile."""
     return (
@@ -212,6 +221,7 @@ def build_server_argv(
         f"--start-child-after-connect={shlex.join(application)}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
+        *clipboard_options(clipboard),
         *SERVER_SECURITY_OPTIONS,
     )
 
@@ -445,6 +455,7 @@ class XpraSession:
             static_cli_options("client", "base"),
             network_profile(self.config.network_profile).client_options(),
             production_transport_options("client", self.config.encoding_profile),
+            clipboard_options(self.config.clipboard),
             CLIENT_SECURITY_OPTIONS,
         )
 
@@ -454,6 +465,7 @@ class XpraSession:
             ("--session-name=owned", "--start-child-after-connect=owned"),
             static_cli_options("server", "lifecycle"),
             production_transport_options("server", self.config.encoding_profile),
+            clipboard_options(self.config.clipboard),
             SERVER_SECURITY_OPTIONS,
         )
 
@@ -546,6 +558,7 @@ class XpraSession:
             self.config.application,
             self.session_name,
             self.config.encoding_profile,
+            self.config.clipboard,
         )
 
     def _capture_remote_display(self) -> None:
@@ -607,6 +620,7 @@ class XpraSession:
             *static_cli_options("client", "base"),
             *network_profile(self.config.network_profile).client_options(),
             *production_transport_options("client", self.config.encoding_profile),
+            *clipboard_options(self.config.clipboard),
             *CLIENT_SECURITY_OPTIONS,
         ]
 

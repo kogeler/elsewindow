@@ -12,6 +12,7 @@ from ssh_wrapper.errors import SSHError
 
 from elsewindow.cli import build_parser
 from elsewindow.config import (
+    DEFAULT_CLIPBOARD_POLICY,
     DEFAULT_ENCODING_PROFILE,
     DEFAULT_NETWORK_PROFILE,
     SUPPORTED_ENCODING_PROFILES,
@@ -47,6 +48,7 @@ def test_source_defaults_and_application_argv(executable_path: Path) -> None:
     assert config.lease_timeout == 45
     assert config.encoding_profile == DEFAULT_ENCODING_PROFILE
     assert config.network_profile == DEFAULT_NETWORK_PROFILE
+    assert config.clipboard == DEFAULT_CLIPBOARD_POLICY
     assert config.application == ("spotify", "value with spaces")
     assert config.authority_uri == "ssh://workstation"
 
@@ -71,7 +73,7 @@ def test_direct_ipv6_authority_has_an_unambiguous_uri(executable_path: Path) -> 
     assert config.connection.ssh_options == ("-l", "deploy", "-p", "2222")
 
 
-def test_reviewed_encoding_and_network_profiles_are_public_inputs(
+def test_reviewed_profiles_and_clipboard_policy_are_public_inputs(
     executable_path: Path,
 ) -> None:
     encoding_profile = next(
@@ -88,6 +90,8 @@ def test_reviewed_encoding_and_network_profiles_are_public_inputs(
             encoding_profile,
             "--network-profile",
             network_profile,
+            "--clipboard",
+            "to-server",
             "--",
             "xterm",
         ]
@@ -97,6 +101,7 @@ def test_reviewed_encoding_and_network_profiles_are_public_inputs(
 
     assert config.encoding_profile == encoding_profile
     assert config.network_profile == network_profile
+    assert config.clipboard == "to-server"
     assert config.xpra_path.is_absolute()
 
 

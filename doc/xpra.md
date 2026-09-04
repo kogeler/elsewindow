@@ -86,9 +86,11 @@ elsewindow \
 
 The encoding default is `rgb`. The network default is the
 `default_profile` declared by the mirrored configuration, currently
-`gigabit_lan`. The user does not select an Xpra backend, display, session name,
-title, individual encoder, decoder, colorspace converter, pixel format, or
-renderer. The remote backend is always Wayland.
+`gigabit_lan`. Clipboard synchronization defaults to bidirectional `both` and
+can be narrowed with `--clipboard=to-server` or disabled with
+`--clipboard=off`. The user does not select an Xpra backend, display, session
+name, title, individual encoder, decoder, colorspace converter, pixel format,
+or renderer. The remote backend is always Wayland.
 
 The compositor atomically chooses a free `wayland-N` socket and publishes it
 through `displayfd`. The launcher validates the owner-controlled session
@@ -153,17 +155,33 @@ against the mirrored YAML so documentation drift fails the repository tests:
 | `power_saving` | 72 | 70 | 0.50 s | 30 Hz | 8 Mbps |
 <!-- END GENERATED XPRA NETWORK PROFILES -->
 
+## Clipboard Policy
+
+The public clipboard policy is applied explicitly to both Xpra peers after the
+mirrored `--minimal` options:
+
+| Value | Synchronization |
+|---|---|
+| `off` | Disabled on the local client and remote server |
+| `to-server` | Local client to remote server only |
+| `both` (default) | Bidirectional |
+
+Clipboard contents travel as Xpra protocol data through the owned SSH mux; no
+forwarding socket is opened. See the [security model](security.md) before using
+bidirectional synchronization across a different trust boundary.
+
 Production consumes the canonical base, lifecycle, selected transport, and
 selected network blocks exactly. It excludes fork-only diagnostics and helper
 commands, translates only the three container-private socket/session paths to
-the owned remote runtime, and appends this project's no-forwarding and
-auxiliary-data restrictions plus dynamic session/application values.
+the owned remote runtime, and appends this project's selected clipboard policy,
+remaining auxiliary-data restrictions, and dynamic session/application values.
 
 The application itself runs on the remote Wayland display. Its Vulkan or
 OpenGL renderer opens the remote GPU and renders there; Xpra captures the
 resulting window image and transports picture updates plus control and input
-over the owned SSH mux. The local machine never receives the application's GL
-or Vulkan command stream and never receives access to the remote render node.
+and clipboard data over the owned SSH mux. The local machine never receives the
+application's GL or Vulkan command stream and never receives access to the
+remote render node.
 
 ## Lifecycle And Isolation
 
@@ -182,7 +200,8 @@ The server cannot adopt an existing display. It binds no Xpra TCP listener.
 OpenSSH forwarding, agent sharing, X11 forwarding, automatic reconnection,
 fallback authentication, Xpra audio, webcam, printing, file transfer, URL and
 file opening, notifications, HTML, SSH upgrades, D-Bus, and additional command
-startup are disabled.
+startup are disabled. Clipboard synchronization follows the validated public
+policy and defaults to `both`.
 
 Normal detach, application exit, cancellation, `SIGINT`, `SIGTERM`, lease
 expiry, or SSH-master loss enters the same idempotent cleanup. The local client

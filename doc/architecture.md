@@ -2,12 +2,13 @@
 
 The project has four runtime layers:
 
-1. `elsewindow.cli` validates public authority, application, profile, and
-   timeout inputs.
+1. `elsewindow.cli` validates public authority, application, profile,
+   clipboard, and timeout inputs.
 2. `elsewindow.live_config` strictly parses the packaged reviewed YAML and
-   assembles complete server and client argument blocks.
-3. `elsewindow.session` combines dynamic owned paths with those blocks and
-   coordinates local and remote Xpra processes.
+   exposes its server and client profile blocks.
+3. `elsewindow.session` combines dynamic owned paths and the selected
+   clipboard and security policy with those blocks, then coordinates local and
+   remote Xpra processes.
 4. the published
    [`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/0.1.0/) package owns the
    OpenSSH master, mux-only commands, environment recovery, bounded diagnostic
@@ -17,7 +18,7 @@ The server always uses Wayland. Its compositor allocates `wayland-N`
 atomically and publishes the selected display through `displayfd`. The client
 attaches through the existing OpenSSH mux rather than a forwarding socket.
 Applications render on the remote machine; the data path carries captured
-pixels, input, and Xpra control traffic.
+pixels, input, clipboard synchronization, and Xpra control traffic.
 
 `tools/install_xpra_release.py` is intentionally independent of the Python
 package and uses only the standard library. `tools/prepare_xpra_images.py`
@@ -40,7 +41,9 @@ component.
 Production session startup, attach, and the live harness's auxiliary Xpra
 commands share the package's strict YAML assembler. Auxiliary command builders
 add only runtime-selected targets and the owned mux wrapper; their canonical
-flags remain package data rather than a second Python table.
+flags remain package data rather than a second Python table. The session layer
+applies the selected clipboard policy explicitly to both Xpra peers after the
+mirrored `--minimal` base options.
 
 The package treats Xpra as a release-backed external application. It validates
 only public command surfaces and observes real process, window, picture, and

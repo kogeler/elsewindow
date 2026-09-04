@@ -34,6 +34,7 @@ def test_help_is_english_and_documents_both_authority_forms(
     assert "--backend" not in output
     assert "--encoding-profile" in output
     assert "--network-profile" in output
+    assert "--clipboard {off,to-server,both}" in output
     assert "--diagnose" in output
     assert DEFAULT_NETWORK_PROFILE in output
     assert "application argv after --" in output
@@ -49,7 +50,7 @@ def test_diagnose_reports_versions_resources_and_missing_commands(
     assert cli.main(["--diagnose"]) == 1
 
     captured = capsys.readouterr()
-    assert "elsewindow: 0.1.0" in captured.out
+    assert f"elsewindow: {cli.__version__}" in captured.out
     assert "ssh-wrapper: 0.1.0" in captured.out
     assert "live-cli.yml: sha256:" in captured.out
     assert "profiles.yml: sha256:" in captured.out
@@ -62,9 +63,13 @@ def test_diagnose_reports_versions_resources_and_missing_commands(
 
 @pytest.mark.parametrize(
     ("option", "value"),
-    (("--encoding-profile", "auto"), ("--network-profile", "unreviewed")),
+    (
+        ("--encoding-profile", "auto"),
+        ("--network-profile", "unreviewed"),
+        ("--clipboard", "unreviewed"),
+    ),
 )
-def test_unreviewed_profile_is_rejected_before_session_start(
+def test_unreviewed_policy_is_rejected_before_session_start(
     monkeypatch: pytest.MonkeyPatch,
     option: str,
     value: str,

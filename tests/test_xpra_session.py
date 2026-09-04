@@ -20,7 +20,7 @@ from ssh_wrapper.connection import ConnectionSpec
 from ssh_wrapper.errors import SSHError
 
 import elsewindow.session as session_module
-from elsewindow.config import XpraConfig
+from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
 from elsewindow.live_config import (
     DEFAULT_ENCODING_PROFILE,
     command_cli_options,
@@ -46,6 +46,7 @@ def _config(
         application=("spotify", "--profile", "value with spaces", "semi;colon"),
         encoding_profile=DEFAULT_ENCODING_PROFILE,
         network_profile=load_network_profiles()[0],
+        clipboard=DEFAULT_CLIPBOARD_POLICY,
         connect_timeout=2,
         ready_timeout=0.2,
         probe_timeout=0.1,
@@ -87,6 +88,7 @@ def test_exact_server_metadata_probe_and_mirrored_default_profiles(
         f"--start-child-after-connect={shlex.join(session.config.application)}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", config.encoding_profile),
+        *session_module.clipboard_options(config.clipboard),
         *session_module.SERVER_SECURITY_OPTIONS,
     )
     assert not any(option.startswith("--start-child=") for option in server)
@@ -105,6 +107,7 @@ def test_exact_server_metadata_probe_and_mirrored_default_profiles(
         *static_cli_options("client", "base"),
         *network_profile(config.network_profile).client_options(),
         *production_transport_options("client", config.encoding_profile),
+        *session_module.clipboard_options(config.clipboard),
         *session_module.CLIENT_SECURITY_OPTIONS,
     ]
     combined = " ".join((*server, probe, *attach))
@@ -211,6 +214,7 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
         f"--start-child-after-connect={shlex.join(session.config.application)}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
+        *session_module.clipboard_options(config.clipboard),
         *session_module.SERVER_SECURITY_OPTIONS,
     )
     assert attach == [
@@ -221,8 +225,37 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
         *static_cli_options("client", "base"),
         *network_profile(selected_network).client_options(),
         *production_transport_options("client", encoding_profile),
+        *session_module.clipboard_options(config.clipboard),
         *session_module.CLIENT_SECURITY_OPTIONS,
     ]
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    (
+        ("off", ("--clipboard=no",)),
+        (
+            "to-server",
+            ("--clipboard=yes", "--clipboard-direction=to-server"),
+        ),
+        ("both", ("--clipboard=yes", "--clipboard-direction=both")),
+    ),
+)
+def test_clipboard_policy_is_explicit_on_both_peers(
+    tmp_path: Path, policy: str, expected: tuple[str, ...]
+) -> None:
+    session = XpraSession(replace(_config(tmp_path), clipboard=policy))
+    session._wrapper = Path("/private/xpra-ssh")
+    session._remote_display = "wayland-7"
+
+    for argv in (session.server_argv(), session.attach_argv()):
+        clipboard = tuple(option for option in argv if option.startswith("--clipboard"))
+        assert clipboard == expected
+
+
+def test_unknown_clipboard_policy_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="clipboard policy"):
+        session_module.clipboard_options("unreviewed")
 
 
 def test_session_name_uses_the_normalized_application_basename(tmp_path: Path) -> None:

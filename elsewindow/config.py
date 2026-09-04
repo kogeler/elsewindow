@@ -25,6 +25,8 @@ DEFAULT_GRACE_TIMEOUT = 5.0
 MAX_TIMEOUT = 900.0
 MAX_APPLICATION_ARGUMENTS = 256
 MAX_APPLICATION_BYTES = 16 * 1024
+DEFAULT_CLIPBOARD_POLICY = "both"
+SUPPORTED_CLIPBOARD_POLICIES = ("off", "to-server", "both")
 DEFAULT_ENCODING_PROFILE = live_config.DEFAULT_ENCODING_PROFILE
 DEFAULT_NETWORK_PROFILE = live_config.load_network_profiles()[0]
 SUPPORTED_ENCODING_PROFILES = live_config.encoding_profile_names()
@@ -48,6 +50,7 @@ class XpraConfig:
     application: tuple[str, ...]
     encoding_profile: str
     network_profile: str
+    clipboard: str
     connect_timeout: float
     ready_timeout: float
     probe_timeout: float
@@ -111,6 +114,12 @@ class XpraConfig:
                 "network profile must be one of: "
                 f"{', '.join(SUPPORTED_NETWORK_PROFILES)}",
             )
+        if args.clipboard not in SUPPORTED_CLIPBOARD_POLICIES:
+            raise SSHError(
+                "invalid_configuration",
+                "clipboard policy must be one of: "
+                f"{', '.join(SUPPORTED_CLIPBOARD_POLICIES)}",
+            )
         heartbeat_interval = _bounded_float(
             "heartbeat interval", args.heartbeat_interval
         )
@@ -125,6 +134,7 @@ class XpraConfig:
             application=application,
             encoding_profile=args.encoding_profile,
             network_profile=args.network_profile,
+            clipboard=args.clipboard,
             connect_timeout=_bounded_float("connect timeout", args.connect_timeout),
             ready_timeout=_bounded_float("ready timeout", args.ready_timeout),
             probe_timeout=_bounded_float("probe timeout", args.probe_timeout),

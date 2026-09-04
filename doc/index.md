@@ -7,7 +7,7 @@ removes only the process group, sockets, and runtime state owned by that
 invocation.
 
 The application renders through the remote Wayland compositor and remote GPU;
-only Xpra picture, input, and control traffic crosses SSH.
+only Xpra picture, input, clipboard, and control traffic crosses SSH.
 
 ## Start here
 

@@ -20,6 +20,7 @@ from ssh_wrapper.errors import SSHError
 
 from . import __version__
 from .config import (
+    DEFAULT_CLIPBOARD_POLICY,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_ENCODING_PROFILE,
     DEFAULT_GRACE_TIMEOUT,
@@ -29,6 +30,7 @@ from .config import (
     DEFAULT_POLL_INTERVAL,
     DEFAULT_PROBE_TIMEOUT,
     DEFAULT_READY_TIMEOUT,
+    SUPPORTED_CLIPBOARD_POLICIES,
     SUPPORTED_ENCODING_PROFILES,
     SUPPORTED_NETWORK_PROFILES,
     XpraConfig,
@@ -69,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SUPPORTED_NETWORK_PROFILES,
         default=DEFAULT_NETWORK_PROFILE,
         help="reviewed client quality/network profile (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--clipboard",
+        choices=SUPPORTED_CLIPBOARD_POLICIES,
+        default=DEFAULT_CLIPBOARD_POLICY,
+        help="clipboard synchronization policy (default: %(default)s)",
     )
     parser.add_argument(
         "--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT
