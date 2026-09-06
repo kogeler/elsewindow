@@ -69,7 +69,15 @@ def test_linux_python_typing_and_package_data_are_exact() -> None:
         "include": ["elsewindow*"]
     }
     assert document["tool"]["setuptools"]["package-data"] == {
-        "elsewindow": ["live-cli.yml", "profiles.yml", "py.typed"]
+        "elsewindow": [
+            "live-cli.yml",
+            "profiles.yml",
+            "py.typed",
+            "requirements-xpra.in",
+            "requirements-xpra.txt",
+            "requirements-xpra-build.in",
+            "requirements-xpra-build.txt",
+        ]
     }
     assert document["build-system"]["requires"] == ["setuptools>=84"]
     assert document["tool"]["setuptools"]["dynamic"] == {

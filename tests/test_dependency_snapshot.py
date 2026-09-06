@@ -14,8 +14,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_SCRIPT = ROOT / ".github/scripts/dependency_snapshot.py"
 AUDIENCES = ("quality", "test", "package", "standalone", "docs")
-LOCKS = ("requirements.txt", *(f"requirements-{name}.txt" for name in AUDIENCES))
-INPUTS = ("requirements.in", *(f"requirements-{name}.in" for name in AUDIENCES))
+LOCKS = (
+    "requirements.txt",
+    *(f"requirements-{name}.txt" for name in AUDIENCES),
+    "elsewindow/requirements-xpra.txt",
+    "elsewindow/requirements-xpra-build.txt",
+)
+INPUTS = (
+    "requirements.in",
+    *(f"requirements-{name}.in" for name in AUDIENCES),
+    "elsewindow/requirements-xpra.in",
+    "elsewindow/requirements-xpra-build.in",
+)
 
 
 def _run_snapshot(root: Path, output: Path) -> subprocess.CompletedProcess[str]:
@@ -37,6 +47,7 @@ def _run_snapshot(root: Path, output: Path) -> subprocess.CompletedProcess[str]:
 def _copy_inputs(destination: Path) -> None:
     shutil.copy2(ROOT / "pyproject.toml", destination / "pyproject.toml")
     for name in INPUTS + LOCKS:
+        (destination / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, destination / name)
 
 
@@ -55,7 +66,7 @@ def _replace_runtime_dependency(path: Path, replacement: str) -> tuple[str, str]
     return name, version
 
 
-def test_snapshot_contains_six_exact_lock_graphs(tmp_path: Path) -> None:
+def test_snapshot_contains_all_exact_lock_graphs(tmp_path: Path) -> None:
     output = tmp_path / "nested/snapshot.json"
     result = _run_snapshot(ROOT, output)
 
@@ -68,6 +79,12 @@ def test_snapshot_contains_six_exact_lock_graphs(tmp_path: Path) -> None:
         assert manifest["resolved"]
 
     runtime = manifests["requirements.txt"]["resolved"]
+    graphics = manifests["elsewindow/requirements-xpra.txt"]["resolved"]
+    assert set(graphics) == {"pyopengl", "pyopengl-accelerate"}
+    assert {item["scope"] for item in graphics.values()} == {"runtime"}
+    builder = manifests["elsewindow/requirements-xpra-build.txt"]["resolved"]
+    assert set(builder) == {"cython", "numpy", "setuptools"}
+    assert {item["scope"] for item in builder.values()} == {"development"}
     assert runtime == {
         "ssh-wrapper": {
             "package_url": "pkg:pypi/ssh-wrapper@0.1.0",

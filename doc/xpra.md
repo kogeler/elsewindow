@@ -32,8 +32,9 @@ same behavior.
 
 Run `make runtime-venv` before using the launcher. The local and remote systems
 need OpenSSH, `false`, Python 3, and the compatible maintained-fork Xpra
-packages. The remote Xpra installation must provide the `seamless` Wayland
-server. The local side needs a working graphical session. The `h264` profile
+packages, plus an accessible systemd journal on each host. The remote Xpra
+installation must provide the `seamless` Wayland server. The local side needs
+a working graphical session. The `h264` profile
 additionally requires a usable DRM render node and a hardware-specific VA-API
 driver on both systems.
 
@@ -48,55 +49,19 @@ imports the required modules after APT installs them.
 
 ## Usage
 
-Inspect installed identities and prerequisites without connecting:
-
-```bash
-elsewindow --diagnose
-```
-
-Use a trusted OpenSSH alias:
+See the [CLI reference](cli.md) for the complete syntax, every option, default,
+allowed value, and combination rule. A basic invocation uses a trusted
+OpenSSH alias:
 
 ```bash
 elsewindow --ssh-alias workstation -- xterm
 ```
 
-Or provide one direct authority:
-
-```bash
-elsewindow \
-  --host host.example \
-  --user desktop-user \
-  --port 2222 \
-  -- xterm
-```
-
-The application arguments begin after `--`. They are validated as data and
-converted once to Xpra's `--start-child-after-connect` value. The application
-starts only after the graphical client connects.
-
-Choose one reviewed encoding profile and, when needed, one network profile:
-
-```bash
-elsewindow \
-  --ssh-alias workstation \
-  --encoding-profile h264 \
-  --network-profile mobile_5g \
-  -- /opt/application/bin/application
-```
-
-The encoding default is `rgb`. The network default is the
-`default_profile` declared by the mirrored configuration, currently
-`gigabit_lan`. Clipboard synchronization defaults to bidirectional `both` and
-can be narrowed with `--clipboard=to-server` or disabled with
-`--clipboard=off`. The user does not select an Xpra backend, display, session
-name, title, individual encoder, decoder, colorspace converter, pixel format,
-or renderer. The remote backend is always Wayland.
-
 The compositor atomically chooses a free `wayland-N` socket and publishes it
 through `displayfd`. The launcher validates the owner-controlled session
-metadata before attaching. The session name comes from the normalized basename
-of the executable, while local windows keep the titles published by the remote
-application.
+metadata before attaching. Ordinary session names come from the normalized
+executable basename; persistent names come from the account-local session key.
+Local windows keep the titles published by the remote application.
 
 ## Reviewed Xpra Profiles
 
@@ -121,54 +86,10 @@ or reviewing an Xpra argument, first read both current `develop` files and
 compare the mirrors byte-for-byte; synchronize drift before changing the
 assembler.
 
-The public encoding mapping is deliberately small:
-
-<!-- BEGIN GENERATED XPRA ENCODING PROFILES -->
-| CLI value | Canonical transport and policy |
-|---|---|
-| `rgb` | `rgb.strict` |
-| `h264` | `h264.adaptive-alpha` |
-<!-- END GENERATED XPRA ENCODING PROFILES -->
-
-The strict RGB policy disables video codecs and CSC and uses the non-OpenGL
-client path. The adaptive-alpha H.264 policy selects native libva H.264,
-server-side libyuv, and native client OpenGL while retaining the canonical
-alpha-capable and lossless alternatives declared by the fork.
-
-For H.264, the launcher checks the public local `xpra opengl` result before
-starting the session. Detailed packet, alpha-transition, VA-API, libyuv,
-NV12-presentation, application, and rendering acceptance remains exclusively
-in the fork that produces the package; this repository consumes the resulting
-reviewed profile without reproducing internal Xpra probes.
-
-The network profiles supply only client-side minimum quality, minimum speed,
-auto-refresh delay, refresh rate, and bandwidth limit. This table is checked
-against the mirrored YAML so documentation drift fails the repository tests:
-
-<!-- BEGIN GENERATED XPRA NETWORK PROFILES -->
-| Profile | Minimum quality | Minimum speed | Auto refresh | Refresh rate | Bandwidth limit |
-|---|---:|---:|---:|---:|---:|
-| `gigabit_lan` (default) | 90 | 90 | 0.10 s | 60 Hz | unlimited (`0`) |
-| `fast_wired` | 82 | 80 | 0.20 s | 60 Hz | 50 Mbps |
-| `mobile_5g` | 78 | 75 | 0.30 s | 45 Hz | 25 Mbps |
-| `mobile_4g` | 68 | 70 | 0.45 s | 30 Hz | 8 Mbps |
-| `power_saving` | 72 | 70 | 0.50 s | 30 Hz | 8 Mbps |
-<!-- END GENERATED XPRA NETWORK PROFILES -->
-
-## Clipboard Policy
-
-The public clipboard policy is applied explicitly to both Xpra peers after the
-mirrored `--minimal` options:
-
-| Value | Synchronization |
-|---|---|
-| `off` | Disabled on the local client and remote server |
-| `to-server` | Local client to remote server only |
-| `both` (default) | Bidirectional |
-
-Clipboard contents travel as Xpra protocol data through the owned SSH mux; no
-forwarding socket is opened. See the [security model](security.md) before using
-bidirectional synchronization across a different trust boundary.
+The CLI reference owns the [encoding profiles](cli.md#encoding-profile) and
+[network profiles](cli.md#network-profile), including the tables checked
+against these mirrors. Detailed codec, GPU, alpha-transition, application, and
+rendering acceptance remains exclusively in the fork that produces the package.
 
 Production consumes the canonical base, lifecycle, selected transport, and
 selected network blocks exactly. It excludes fork-only diagnostics and helper
@@ -183,7 +104,65 @@ and clipboard data over the owned SSH mux. The local machine never receives the
 application's GL or Vulkan command stream and never receives access to the
 remote render node.
 
+## System Journal
+
+In ordinary and persistent sessions, the local terminal and journal aggregate
+four explicitly labeled sources: `elsewindow-local`, `elsewindow-remote`,
+`elsewindow-xpra-local`, and `elsewindow-xpra-remote`. The remote journal contains
+only the two remote sources. Select verbosity through the
+[logging option](cli.md#log-level); that reference describes all levels,
+local stdout/stderr routing, and the sensitive-data warning.
+
+Read logs locally on either host:
+
+```bash
+journalctl -t elsewindow-local -t elsewindow-remote -t elsewindow-xpra-local -t elsewindow-xpra-remote --since today
+journalctl -t elsewindow-remote -t elsewindow-xpra-remote -f
+```
+
+Records carry `ELSEWINDOW_SIDE`, `ELSEWINDOW_SESSION`, `ELSEWINDOW_LOG_LEVEL`,
+`ELSEWINDOW_CATEGORY`, `ELSEWINDOW_COMPONENT`, `ELSEWINDOW_FORWARDED`, and
+`ELSEWINDOW_SOURCE_PID`. Use
+`ELSEWINDOW_SESSION=<session-id>` to select one session on either host:
+
+```bash
+journalctl 'ELSEWINDOW_SESSION=<session-id>' -f
+```
+
+Replace `<session-id>` with the ID printed in `[session=...]` in every message.
+Ordinary invocations receive unique IDs. Persistent IDs derive from the remote
+machine identity, UID, and canonical executable/argument key, so reconnects keep
+one ID without mixing different hosts or accounts. This log namespace does not
+change persistent application lookup. Multiple clients for one persistent
+application share its ID and receive their own live log subscriptions.
+Local startup probes send diagnostics to the local journal even when SSH is
+never opened. Persistent startup buffers at most 256 KiB until identification;
+failed identification flushes those records with the unique invocation ID.
+
+New remote records travel over dedicated channels of the already authenticated
+SSH master. Subscription starts before remote probes or application startup;
+resuming a persistent session subscribes to its stable session key before
+attaching. No second authentication, reconnection, privileged journal reader,
+or TCP log listener is used. Remote helpers publish to private bounded Unix
+datagram queues; those queues are not log files and are removed when their
+owned SSH observer exits. Slow or disconnected observers do not stop the
+application. Reported transport gaps can be investigated in the server journal.
+Records produced while disconnected are retained only by the server journal;
+the next connection subscribes to new records without replaying history.
+
+Journald must be available on both hosts before startup. Delivery failures
+during a session are reported without changing application lifetime. Journal
+access, rate limits, retention and persistence across reboot remain host policy;
+Elsewindow does not change them or install packages. Individual records and
+partial lines are bounded. Unstructured stdout defaults to info and stderr to
+warning; traceback continuations inherit the preceding Xpra severity.
+
 ## Lifecycle And Isolation
+
+Ordinary sessions use a heartbeat-owned process group. The opt-in
+[persistent option](cli.md#persistent) uses a resumable user service; its
+reference covers session identity, compatible reconnect settings, linger
+consent, and lifetime limits.
 
 One invocation:
 
@@ -192,7 +171,7 @@ One invocation:
 3. validates the remote public `seamless` command and required options through
    that master's mux socket;
 4. starts a foreground Wayland Xpra server in one heartbeat-supervised remote
-   process group;
+   process group, or creates/resumes the verified persistent user service;
 5. reads and validates the display selected through `displayfd`;
 6. attaches one local Xpra client through the same mux socket.
 
@@ -203,29 +182,23 @@ file opening, notifications, HTML, SSH upgrades, D-Bus, and additional command
 startup are disabled. Clipboard synchronization follows the validated public
 policy and defaults to `both`.
 
-Normal detach, application exit, cancellation, `SIGINT`, `SIGTERM`, lease
-expiry, or SSH-master loss enters the same idempotent cleanup. The local client
+In ordinary mode, normal detach, application exit, cancellation, `SIGHUP`,
+`SIGINT`, `SIGTERM`, lease expiry, or SSH-master loss enters the same idempotent
+cleanup. The local client
 stops first. The remote supervisor then terminates only its recorded process
 group and removes its sockets and private runtime state. It never searches by
 executable name or modifies an unrelated Xpra session.
+
+In persistent mode, those local disconnect paths leave the remote service
+alone. Only the foreground application's exit ends the normal remote lifetime.
+See [timeouts and intervals](cli.md#timeouts-and-intervals) for the timing
+controls that apply to each mode.
 
 Applications that double-fork, move to another cgroup or session, or delegate
 to an already-running single-instance process can escape this ownership
 boundary. Use an application option that creates a fresh foreground instance.
 
-## Options And Errors
-
-The lifecycle timeout options are:
-
-| Option | Default |
-|---|---:|
-| `--connect-timeout` | `120` seconds |
-| `--ready-timeout` | `45` seconds |
-| `--probe-timeout` | `8` seconds |
-| `--poll-interval` | `1` second |
-| `--heartbeat-interval` | `10` seconds |
-| `--lease-timeout` | `45` seconds |
-| `--cleanup-grace` | `5` seconds |
+## Errors And Diagnostics
 
 Stable failures include `missing_dependency`, `connection_start_failed`,
 `connection_lost`, `xpra_probe_timeout`, `xpra_ready_timeout`,

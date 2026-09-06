@@ -172,6 +172,16 @@ def build(
         f"{root / 'elsewindow/profiles.yml'}{separator}elsewindow",
         "--add-data",
         f"{root / 'elsewindow/py.typed'}{separator}elsewindow",
+        "--add-data",
+        f"{root / 'elsewindow/_persistent_agent.py'}{separator}elsewindow",
+        "--add-data",
+        f"{root / 'elsewindow/journal.py'}{separator}elsewindow",
+        "--add-data",
+        f"{root / 'elsewindow/log_transport.py'}{separator}elsewindow",
+        "--add-data",
+        f"{root / 'elsewindow/requirements-xpra.txt'}{separator}elsewindow",
+        "--add-data",
+        f"{root / 'elsewindow/requirements-xpra-build.txt'}{separator}elsewindow",
     ]
     completed = subprocess.run(
         command, cwd=root, env=environment, check=False, text=True, timeout=900

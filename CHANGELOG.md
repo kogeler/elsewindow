@@ -6,6 +6,70 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+## [0.2.0] - 2026-09-05
+
+### Added
+
+- Added a separate system-Python Xpra environment with hash-locked matching
+  PyOpenGL and accelerator additions. `make runtime-venv` prepares both local
+  environments; installed and standalone commands provide `--prepare-xpra`.
+  All local Xpra commands use the prepared interpreter, while ordinary startup
+  validates current inputs and installed bytes without installing anything.
+- Bundled Xpra setup resources in all artifacts and shared clean setup,
+  stale-environment rejection, and repair smoke across wheel, sdist, and
+  standalone routes. Extended the existing live topology to exercise the
+  prepared client and its public zero-copy capability.
+- Support accelerator source builds when a wheel is unavailable, including
+  Linux arm64, using a hash-verified archive and separately locked temporary
+  build tools. Exercise offline native compilation in every artifact smoke.
+- Added synchronized `--log-level` control for Elsewindow and Xpra logs on both
+  hosts, with `warning` by default, host-local journald records in ordinary and
+  persistent sessions, and matching local stdout/stderr output.
+- Added targeted diagnostics with `--log-level=debug-clipboard` and general
+  diagnostics with `--log-level=debug`. Both modes warn that system journals
+  may contain sensitive data.
+- Preserved local Xpra probe diagnostics in the journal, including failures
+  before SSH authentication, and added side/session/source-process metadata.
+- Extended the existing live topology to verify real journals on both hosts,
+  identical local terminal output, and unchanged ordinary/persistent cleanup.
+- Aggregate four clearly labeled local/remote Elsewindow and Xpra sources in
+  the local terminal and journal. Forward new remote records through owned
+  SSH mux channels in both lifecycle modes; keep the remote journal limited
+  to remote sources, without granting journal-reading privileges or reconnecting.
+- Include one shared session ID in every log message and native journal record
+  on both hosts. Keep ordinary invocations distinct and persistent IDs stable
+  across reconnects, namespaced by remote machine and account; isolate concurrent
+  log subscribers without changing application identity or ownership.
+- Added `--persistent` sessions backed by owned transient user systemd
+  services. Repeating the same remote executable invocation path and exact
+  arguments resumes the application after client or SSH loss; exiting the
+  foreground application with any status ends the session. Ordinary
+  heartbeat-supervised sessions remain the default.
+- Added per-invocation linger checks and interactive consent to enable it for
+  the remote account, using the same owned SSH connection for any required
+  sudo prompt. Persistent sessions never reconnect or restart automatically.
+- Extended the existing release-backed live topology with real systemd,
+  linger refusal/consent, detach and client/SSH-loss recovery, cancellation,
+  repeated manual reconnects, and cleanup after successful or failed
+  application exit.
+
+### Changed
+
+- Persistent resumption requires the original logging policy.
+- Consolidated all public CLI options, defaults, profiles, and restrictions
+  into one linked reference, with parser-backed documentation checks.
+- Synchronized the maintained-fork clipboard YAML blocks and assembled the
+  same reviewed policy for both peers without duplicating option values or
+  applying the fork's clipboard-test-only X11 overrides.
+- Included the persistent-session helper in wheel, source, and standalone
+  distributions, verified its packaged bytes, and exposed its source digest
+  through `--diagnose`.
+
+### Fixed
+
+- Routed `SIGHUP` through normal session cancellation and terminated owned
+  local SSH probe processes when their requests are cancelled.
+
 ## [0.1.1] - 2026-09-04
 
 ### Changed

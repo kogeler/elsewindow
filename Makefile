@@ -6,6 +6,7 @@ SHELL := /bin/bash
 SYSTEM_PYTHON ?= python3
 PODMAN ?= podman
 RUNTIME_VENV := venv-runtime
+XPRA_VENV := venv-xpra
 QUALITY_VENV := venv-quality
 TEST_VENV := venv-test
 PACKAGE_VENV := venv-package
@@ -25,12 +26,16 @@ TEST_INPUT := requirements-test.in
 PACKAGE_INPUT := requirements-package.in
 STANDALONE_INPUT := requirements-standalone.in
 DOCS_INPUT := requirements-docs.in
+XPRA_INPUT := elsewindow/requirements-xpra.in
+XPRA_BUILD_INPUT := elsewindow/requirements-xpra-build.in
 RUNTIME_LOCK := requirements.txt
 QUALITY_LOCK := requirements-quality.txt
 TEST_LOCK := requirements-test.txt
 PACKAGE_LOCK := requirements-package.txt
 STANDALONE_LOCK := requirements-standalone.txt
 DOCS_LOCK := requirements-docs.txt
+XPRA_LOCK := elsewindow/requirements-xpra.txt
+XPRA_BUILD_LOCK := elsewindow/requirements-xpra-build.txt
 STANDALONE_ARCH ?=
 RUNTIME_STATE := $(RUNTIME_VENV)/.$(RUNTIME_LOCK)
 QUALITY_STATE := $(QUALITY_VENV)/.$(QUALITY_LOCK)
@@ -80,7 +85,7 @@ BOX_CONFINE := --rm --interactive --network=none --userns=auto:size=2048 \
 BOX_ONLINE = $(subst --network=none,--network=slirp4netns,$(BOX_CONFINE))
 LOCK_ONLINE = $(subst size=512m,size=4g,$(BOX_ONLINE))
 
-.PHONY: help runtime-venv quality-venv test-venv package-venv standalone-venv \
+.PHONY: help runtime-venv runtime-python-venv xpra-venv quality-venv test-venv package-venv standalone-venv \
 	docs-venv docs-build docs-audit docs-serve \
 	dev-venv dependency-wheels package build standalone smoke-wheel smoke-sdist \
 	smoke-standalone smoke reproducibility checksums lock \
@@ -95,14 +100,15 @@ LOCK_ONLINE = $(subst size=512m,size=4g,$(BOX_ONLINE))
 
 help:
 	@printf '%s\n' \
-		'make runtime-venv       Install the production environment' \
+		'make runtime-venv       Prepare Elsewindow and isolated local Xpra environments' \
+		'make xpra-venv          Prepare only the local Xpra additions' \
 		'make package            Build and validate the wheel and source archive' \
 		'make standalone         Build and validate this host architecture binary' \
 		'make smoke              Clean-smoke Python artifacts and native binary' \
 		'make reproducibility    Compare two clean wheel and sdist builds' \
 		'make docs-audit         Render and audit the documentation site' \
 		'make docs-serve         Serve the rendered documentation locally' \
-		'make lock               Recompile all six hash locks' \
+		'make lock               Recompile all eight hash locks' \
 		'make refresh-dependencies Upgrade and recompile all locks' \
 		'make check              Run the complete local governance gate' \
 		'make ci                 Run host checks, audit, and Python 3.13 compatibility' \
@@ -110,7 +116,13 @@ help:
 		'make release-notes      Render the current changelog section' \
 		'make live-test          Run the automatic Xpra lifecycle matrix'
 
-runtime-venv:
+runtime-venv: runtime-python-venv xpra-venv
+
+xpra-venv: runtime-python-venv
+	@PYTHONPATH='$(CURDIR)' ELSEWINDOW_XPRA_VENV='$(CURDIR)/$(XPRA_VENV)' \
+		$(RUNTIME_PYTHON) -m elsewindow --prepare-xpra
+
+runtime-python-venv:
 	@if [[ ! -x '$(RUNTIME_PYTHON)' ]] || [[ ! -f '$(RUNTIME_STATE)' ]] || \
 		! cmp -s '$(RUNTIME_LOCK)' '$(RUNTIME_STATE)' || \
 		! '$(RUNTIME_PYTHON)' -c 'import importlib.metadata, ssh_wrapper; assert importlib.metadata.version("ssh-wrapper") == "0.1.0"' >/dev/null 2>&1; then \
@@ -204,6 +216,7 @@ dependency-wheels: package-venv
 	@$(PACKAGE_PYTHON) -m pip download --quiet --require-hashes \
 		--only-binary=:all: --no-deps --dest '$(DEPENDENCY_WHEEL_DIR)' \
 		--requirement '$(RUNTIME_LOCK)'
+	@$(PACKAGE_PYTHON) tools/download_xpra_dependencies.py '$(DEPENDENCY_WHEEL_DIR)'
 
 package: package-venv
 	@$(PACKAGE_PYTHON) tools/build_distributions.py \
@@ -240,10 +253,11 @@ smoke-sdist: package dependency-wheels quality-venv
 		--python '$(SYSTEM_PYTHON)' --mypy '$(QUALITY_VENV)/bin/mypy' \
 		--build-python '$(PACKAGE_PYTHON)'
 
-smoke-standalone: standalone
+smoke-standalone: standalone dependency-wheels
 	@arch=$$($(STANDALONE_PYTHON) -c \
 		'from tools.build_standalone import standalone_architecture; print(standalone_architecture())'); \
-	$(SYSTEM_PYTHON) tools/smoke_standalone.py "dist/elsewindow-linux-$$arch"
+	$(SYSTEM_PYTHON) tools/smoke_standalone.py "dist/elsewindow-linux-$$arch" \
+		--dependency-dist '$(DEPENDENCY_WHEEL_DIR)'
 
 smoke: smoke-wheel smoke-sdist smoke-standalone
 
@@ -274,7 +288,7 @@ compatibility-image:
 
 lock: lock-image
 	@$(PROJECT_ARCHIVE) | $(PODMAN) run $(LOCK_ONLINE) \
-		--env BOX_EXPORT='$(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK)' \
+		--env BOX_EXPORT='$(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK) $(XPRA_LOCK) $(XPRA_BUILD_LOCK)' \
 		--env BOX_EXPORT_ON_SUCCESS=1 '$(LOCK_TAG)' sh -ceu \
 		'python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
 			--output-file=$(RUNTIME_LOCK) $(RUNTIME_INPUT); \
@@ -288,10 +302,14 @@ lock: lock-image
 			--output-file=$(STANDALONE_LOCK) $(STANDALONE_INPUT); \
 		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
 			--output-file=$(DOCS_LOCK) $(DOCS_INPUT); \
-		chmod 0644 $(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK)' \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(XPRA_LOCK) $(XPRA_INPUT); \
+		python -m piptools compile $(COMPILE) $(LOCK_UPGRADE) \
+			--output-file=$(XPRA_BUILD_LOCK) $(XPRA_BUILD_INPUT); \
+		chmod 0644 $(RUNTIME_LOCK) $(QUALITY_LOCK) $(TEST_LOCK) $(PACKAGE_LOCK) $(STANDALONE_LOCK) $(DOCS_LOCK) $(XPRA_LOCK) $(XPRA_BUILD_LOCK)' \
 		| $(PAYLOAD_MERGE)
 	@chmod 0644 '$(RUNTIME_LOCK)' '$(QUALITY_LOCK)' '$(TEST_LOCK)' \
-		'$(PACKAGE_LOCK)' '$(STANDALONE_LOCK)' '$(DOCS_LOCK)'
+		'$(PACKAGE_LOCK)' '$(STANDALONE_LOCK)' '$(DOCS_LOCK)' '$(XPRA_LOCK)' '$(XPRA_BUILD_LOCK)'
 
 refresh-dependencies:
 	@$(MAKE) lock LOCK_UPGRADE=--upgrade
@@ -310,6 +328,10 @@ freeze-check: lock-image
 			--constraint=$(STANDALONE_LOCK) --output-file=/tmp/standalone.txt $(STANDALONE_INPUT); \
 		python -m piptools compile $(COMPILE) \
 			--constraint=$(DOCS_LOCK) --output-file=/tmp/docs.txt $(DOCS_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(XPRA_LOCK) --output-file=/tmp/xpra.txt $(XPRA_INPUT); \
+		python -m piptools compile $(COMPILE) \
+			--constraint=$(XPRA_BUILD_LOCK) --output-file=/tmp/xpra-build.txt $(XPRA_BUILD_INPUT); \
 		diff -u <(sed "/^[[:space:]]*#/d" $(RUNTIME_LOCK)) \
 			<(sed "/^[[:space:]]*#/d" /tmp/runtime.txt); \
 		diff -u <(sed "/^[[:space:]]*#/d" $(QUALITY_LOCK)) \
@@ -321,7 +343,11 @@ freeze-check: lock-image
 		diff -u <(sed "/^[[:space:]]*#/d" $(STANDALONE_LOCK)) \
 			<(sed "/^[[:space:]]*#/d" /tmp/standalone.txt); \
 		diff -u <(sed "/^[[:space:]]*#/d" $(DOCS_LOCK)) \
-			<(sed "/^[[:space:]]*#/d" /tmp/docs.txt)'
+			<(sed "/^[[:space:]]*#/d" /tmp/docs.txt); \
+		diff -u <(sed "/^[[:space:]]*#/d" $(XPRA_LOCK)) \
+			<(sed "/^[[:space:]]*#/d" /tmp/xpra.txt); \
+		diff -u <(sed "/^[[:space:]]*#/d" $(XPRA_BUILD_LOCK)) \
+			<(sed "/^[[:space:]]*#/d" /tmp/xpra-build.txt)'
 
 format: quality-venv
 	@$(RUFF) check --fix $(SOURCES)
@@ -463,6 +489,7 @@ LIVE_CLIENT_CONFINE = --pull=never --userns=auto:size=2048 \
 	--cgroupns=private --systemd=false --no-hosts --unsetenv-all --umask=077 \
 	--pids-limit=1024 --memory=8g --memory-swap=8g \
 	--ulimit=nofile=4096:4096 --log-driver=none --timeout=1800 \
+	--tmpfs=/run:rw,nosuid,nodev,size=64m,mode=0755 \
 	--tmpfs=/tmp:rw,nosuid,nodev,size=512m,mode=1777 \
 	--tmpfs=/work:rw,exec,nosuid,nodev,size=2g,mode=1777 \
 	--mount=type=tmpfs,destination=/home/box,tmpfs-size=16777216,tmpfs-mode=0700,chown=true \
@@ -472,18 +499,18 @@ LIVE_TARGET_CONFINE = --pull=never --userns=auto:size=2048 \
 	--cap-drop=ALL --cap-add=AUDIT_WRITE \
 	--cap-add=CHOWN --cap-add=DAC_OVERRIDE --cap-add=FOWNER --cap-add=KILL \
 	--cap-add=NET_ADMIN --cap-add=NET_BIND_SERVICE --cap-add=SETGID \
-	--cap-add=SETUID --cap-add=SYS_CHROOT --ipc=private --pid=private \
-	--uts=private --cgroupns=private --systemd=false --pids-limit=512 \
+	--cap-add=SETUID --cap-add=SETPCAP --cap-add=SYS_CHROOT --ipc=private --pid=private \
+	--uts=private --cgroupns=private --systemd=always --pids-limit=512 \
 	--memory=1g --memory-swap=1g --log-driver=k8s-file \
 	--tmpfs=/tmp:rw,nosuid,nodev,size=512m,mode=1777
 
-live-preflight: runtime-venv xpra-images
+live-preflight: runtime-python-venv xpra-images
 	@target_image=$$($(SYSTEM_PYTHON) tools/prepare_xpra_images.py image --role target); \
 	client_image=$$($(SYSTEM_PYTHON) tools/prepare_xpra_images.py image --role client); \
 	PYTHONPATH='$(CURDIR)' PODMAN='$(PODMAN)' $(RUNTIME_PYTHON) $(LIVE_HARNESS) \
 		--target-image "$$target_image" --client-image "$$client_image" --preflight-only
 
-live-test: runtime-venv package xpra-images
+live-test: runtime-python-venv package xpra-images
 	@target_image=$$($(SYSTEM_PYTHON) tools/prepare_xpra_images.py image --role target); \
 	client_image=$$($(SYSTEM_PYTHON) tools/prepare_xpra_images.py image --role client); \
 	$(SYSTEM_PYTHON) tools/create_live_payload.py \
@@ -513,7 +540,7 @@ clean:
 		-path '*/__pycache__/*' -delete
 	@find elsewindow tests tools doc/site .github/scripts -depth -type d \
 		-name __pycache__ -empty -delete
-	@for path in '$(RUNTIME_VENV)' '$(QUALITY_VENV)' '$(TEST_VENV)' \
+	@for path in '$(RUNTIME_VENV)' '$(XPRA_VENV)' '$(QUALITY_VENV)' '$(TEST_VENV)' \
 		'$(PACKAGE_VENV)' '$(STANDALONE_VENV)' '$(DOCS_VENV)' .pytest_cache \
 		.ruff_cache .mypy_cache .coverage coverage.xml '$(ARTIFACTS)' \
 		__pycache__ build dist site elsewindow.egg-info; do \

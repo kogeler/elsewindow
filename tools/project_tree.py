@@ -26,12 +26,13 @@ ROOT_GENERATED_DIRECTORIES = frozenset(
         "venv-package",
         "venv-quality",
         "venv-runtime",
+        "venv-xpra",
         "venv-standalone",
         "venv-test",
     }
 )
 GENERATED_DIRECTORY_NAMES = frozenset({"__pycache__"})
-ROOT_GENERATED_FILES = frozenset({".coverage", "coverage.xml"})
+ROOT_GENERATED_FILES = frozenset({".coverage", "coverage.xml", ".venv-xpra.lock"})
 GENERATED_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
@@ -43,6 +44,7 @@ def _excluded_directory(relative: Path) -> bool:
     return (
         relative.name in GENERATED_DIRECTORY_NAMES
         or (len(relative.parts) == 1 and relative.name in ROOT_GENERATED_DIRECTORIES)
+        or (len(relative.parts) == 1 and relative.name.startswith(".venv-xpra-"))
         or relative.name.endswith(".egg-info")
     )
 

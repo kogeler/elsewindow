@@ -21,6 +21,7 @@ if [[ ${1:-} == -c ]]; then
     exit
 fi
 [[ ${1:-} == -m && ${2:-} == elsewindow ]]
+[[ ${ELSEWINDOW_XPRA_VENV:-} == ${EXPECTED_PYTHONPATH}/venv-xpra ]]
 shift 2
 printf 'argc=%s\n' "$#"
 printf '<%s>\n' "$@"

@@ -6,6 +6,10 @@ include README.md
 include pyproject.toml
 include requirements.in
 recursive-include elsewindow *.py *.yml py.typed
+include elsewindow/requirements-xpra.in
+include elsewindow/requirements-xpra.txt
+include elsewindow/requirements-xpra-build.in
+include elsewindow/requirements-xpra-build.txt
 prune .github
 prune bin
 prune containers

@@ -22,7 +22,8 @@ Xpra arguments require a fresh comparison with both canonical fork YAML files
 and tests of the complete assembled argv.
 
 Direct Python pins belong in the matching `requirements*.in` file. Each tool
-input extends `requirements.in`; run `make lock` and review all six generated
+input extends `requirements.in`; the two packaged Xpra inputs are independent.
+Run `make lock` and review all eight generated
 `.txt` locks after changing a direct dependency. Do not hand-edit a lock.
 
 ## Changelog and release intent

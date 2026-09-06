@@ -63,7 +63,8 @@ nav:
   - Home: index.md
   - Users:
       - Getting started: getting-started.md
-      - Xpra behavior and profiles: xpra.md
+      - CLI reference: cli.md
+      - Xpra behavior: xpra.md
       - Security model: security.md
   - Design:
       - Architecture: architecture.md

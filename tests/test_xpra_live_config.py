@@ -67,7 +67,7 @@ def test_mirrors_drive_every_production_block_without_option_copies() -> None:
     configured = live_config.load_live_cli()
     for role, blocks in configured.items():
         for block, options in blocks.items():
-            if block in {"commands", "transports"}:
+            if block in {"commands", "transports", "clipboard"}:
                 continue
             assert live_config.static_cli_options(role, block) == options
         for command, options in blocks["commands"].items():
@@ -110,7 +110,7 @@ def test_mirrored_configuration_parser_fails_closed_generically(tmp_path: Path) 
 
 
 def test_documented_network_table_is_rendered_from_the_mirror() -> None:
-    documentation = (Path(__file__).resolve().parents[1] / "doc/xpra.md").read_text(
+    documentation = (Path(__file__).resolve().parents[1] / "doc/cli.md").read_text(
         encoding="utf-8"
     )
     start = documentation.index(NETWORK_TABLE_START)

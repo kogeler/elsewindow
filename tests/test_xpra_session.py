@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import os
 import shlex
 import socket
@@ -21,6 +23,7 @@ from ssh_wrapper.errors import SSHError
 
 import elsewindow.session as session_module
 from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
+from elsewindow.journal import xpra_environment
 from elsewindow.live_config import (
     DEFAULT_ENCODING_PROFILE,
     command_cli_options,
@@ -230,20 +233,11 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
     ]
 
 
-@pytest.mark.parametrize(
-    ("policy", "expected"),
-    (
-        ("off", ("--clipboard=no",)),
-        (
-            "to-server",
-            ("--clipboard=yes", "--clipboard-direction=to-server"),
-        ),
-        ("both", ("--clipboard=yes", "--clipboard-direction=both")),
-    ),
-)
+@pytest.mark.parametrize("policy", load_live_cli()["server"]["clipboard"])
 def test_clipboard_policy_is_explicit_on_both_peers(
-    tmp_path: Path, policy: str, expected: tuple[str, ...]
+    tmp_path: Path, policy: str
 ) -> None:
+    expected = load_live_cli()["server"]["clipboard"][policy]
     session = XpraSession(replace(_config(tmp_path), clipboard=policy))
     session._wrapper = Path("/private/xpra-ssh")
     session._remote_display = "wayland-7"
@@ -256,6 +250,46 @@ def test_clipboard_policy_is_explicit_on_both_peers(
 def test_unknown_clipboard_policy_fails_closed() -> None:
     with pytest.raises(RuntimeError, match="clipboard policy"):
         session_module.clipboard_options("unreviewed")
+
+
+def test_logging_uses_an_explicit_environment_without_mutating_inherited_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XPRA_CLIPBOARD_DEBUG", "inherited")
+    monkeypatch.setenv("XPRA_X11_DEBUG_EVENTS", "inherited")
+    config = replace(_config(tmp_path), log_level="debug-clipboard")
+    environment = xpra_environment(config.log_level)
+    assert environment["XPRA_CLIPBOARD_DEBUG"] == "1"
+    assert environment["XPRA_X11_DEBUG_EVENTS"] == "XFSelectionNotify"
+    assert xpra_environment("warning")["XPRA_CLIPBOARD_DEBUG"] == "0"
+    assert os.environ["XPRA_CLIPBOARD_DEBUG"] == "inherited"
+    assert os.environ["XPRA_X11_DEBUG_EVENTS"] == "inherited"
+
+
+@pytest.mark.asyncio
+async def test_clipboard_debug_mirrors_the_filtered_client_tail(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"ELSEWINDOW_LOG|DEBUG|xpra.clipboard|clipboard debug marker\n")
+    stream.feed_eof()
+    session = XpraSession(replace(_config(tmp_path), log_level="debug-clipboard"))
+
+    await session._drain_client(stream, session.client_stderr)
+
+    assert capsys.readouterr().out == (
+        f"elsewindow-xpra-local: [session={session.session_id}] clipboard debug marker\n"
+    )
+    assert session.client_stderr.text().endswith("clipboard debug marker\n")
+    session.journal.close()
+
+
+def assert_remote_capability_probe(calls: list[str]) -> None:
+    assert len(calls) == 1
+    argv = shlex.split(calls[0])
+    assert argv[:2] == ["python3", "-c"]
+    assert json.loads(base64.b64decode(argv[-1])) == ["xpra", "seamless", "--help"]
 
 
 def test_session_name_uses_the_normalized_application_basename(tmp_path: Path) -> None:
@@ -446,7 +480,7 @@ async def test_capability_checks_use_public_cli_instead_of_version_numbers(
     await session._check_remote_capabilities()
 
     assert local_calls == [[str(session.config.xpra_path), "attach", "--help"]]
-    assert remote_calls == ["command -v python3 >/dev/null && xpra seamless --help"]
+    assert_remote_capability_probe(remote_calls)
 
 
 @pytest.mark.asyncio
@@ -485,7 +519,7 @@ async def test_h264_capabilities_add_the_public_local_opengl_check(
     monkeypatch.setattr(session, "_run_mux", remote)
     await session._check_remote_capabilities()
 
-    assert remote_calls == ["command -v python3 >/dev/null && xpra seamless --help"]
+    assert_remote_capability_probe(remote_calls)
 
 
 @pytest.mark.asyncio
@@ -623,10 +657,11 @@ async def test_early_remote_failure_reports_bounded_diagnostic(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("persistent", (False, True))
 async def test_run_cleans_remote_and_master_after_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistent: bool
 ) -> None:
-    session = XpraSession(_config(tmp_path))
+    session = XpraSession(replace(_config(tmp_path), persistent=persistent))
     events: list[str] = []
 
     async def record(name: str) -> None:
@@ -634,6 +669,16 @@ async def test_run_cleans_remote_and_master_after_success(
 
     monkeypatch.setattr(session, "_check_local_capabilities", lambda: record("local"))
     monkeypatch.setattr(session.master, "start", lambda: record("master-start"))
+
+    class FakeLogChannel:
+        async def close(self) -> None:
+            events.append("log-close")
+
+    async def subscribe(_key: str) -> None:
+        events.append("log-subscribe")
+        session._remote_logs.append(FakeLogChannel())  # type: ignore[arg-type]
+
+    monkeypatch.setattr(session, "_subscribe_logs", subscribe)
     monkeypatch.setattr(
         session.master,
         "create_mux_wrapper",
@@ -654,25 +699,33 @@ async def test_run_cleans_remote_and_master_after_success(
 
     class FakeRemote:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            return
+            self.record = {"key": "a" * 64, "session_name": "persistent-fixture"}
 
-        async def start(self) -> None:
+        async def identify(self, _application: tuple[str, ...]) -> str:
+            events.append("identify")
+            return "d" * 64
+
+        async def start(self, *_args: Any) -> None:
             events.append("remote-start")
 
         async def close(self) -> None:
             events.append("remote-close")
 
     monkeypatch.setattr(session_module, "OwnedRemoteProcess", FakeRemote)
+    monkeypatch.setattr(session_module, "PersistentSession", FakeRemote)
 
     assert await session.run() == 0
     assert events == [
         "local",
         "master-start",
+        "log-subscribe",
+        *(("identify", "log-close", "log-subscribe") if persistent else ()),
         "remote-check",
         "remote-start",
         "ready",
         "client",
         "lifecycle",
-        "remote-close",
+        *(("remote-close",) if not persistent else ()),
+        "log-close",
         "master-close",
     ]

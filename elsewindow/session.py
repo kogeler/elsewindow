@@ -20,13 +20,24 @@ from ssh_wrapper.errors import SSHError
 from ssh_wrapper.remote_process import BoundedTail, OwnedRemoteProcess
 
 from .config import SUPPORTED_CLIPBOARD_POLICIES, XpraConfig
+from .journal import (
+    PRIORITIES,
+    Journal,
+    JournalError,
+    XpraLogStream,
+    remote_argv,
+    xpra_environment,
+)
 from .live_config import (
     command_cli_options,
+    load_live_cli,
     network_profile,
     production_encoding,
     production_transport_options,
     static_cli_options,
 )
+from .log_transport import LogTransportError, RemoteLogChannel
+from .persistent import PersistentSession, open_terminal
 
 LOCAL_PROCESS_STOP_TIMEOUT = 5.0
 CAPABILITY_TIMEOUT = 15.0
@@ -93,9 +104,9 @@ def clipboard_options(policy: str) -> tuple[str, ...]:
     """Return the explicit Xpra options for one public clipboard policy."""
     if policy not in SUPPORTED_CLIPBOARD_POLICIES:
         raise RuntimeError("the clipboard policy is invalid")
-    if policy == "off":
-        return ("--clipboard=no",)
-    return ("--clipboard=yes", f"--clipboard-direction={policy}")
+    # The fork's client clipboard gate also isolates unrelated X11 features.
+    # Apply only the symmetric server policy, not those test-only workarounds.
+    return tuple(load_live_cli()["server"]["clipboard"][policy])
 
 
 def _translate_server_runtime_options(
@@ -209,6 +220,8 @@ def build_server_argv(
     session_name: str,
     encoding_profile: str,
     clipboard: str,
+    *,
+    persistent: bool = False,
 ) -> tuple[str, ...]:
     """Build one production Wayland server command from the mirrored profile."""
     return (
@@ -218,7 +231,7 @@ def build_server_argv(
         "seamless",
         *_production_server_base_options(),
         f"--session-name={session_name}",
-        f"--start-child-after-connect={shlex.join(application)}",
+        f"{'--start-child' if persistent else '--start-child-after-connect'}={shlex.join(application)}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
         *clipboard_options(clipboard),
@@ -412,12 +425,19 @@ async def _terminate_local(process: asyncio.subprocess.Process | None) -> None:
         await process.wait()
 
 
+class ReportedSSHError(SSHError):
+    """A runtime failure already sent to the journal and filtered terminal sink."""
+
+
 class XpraSession:
     """Own one new remote Xpra session and one local attaching client."""
 
     def __init__(self, config: XpraConfig) -> None:
         self.config = config
         self.session_id = secrets.token_hex(16)
+        self.journal = Journal(
+            config.log_level, "client", self.session_id, deferred=config.persistent
+        )
         executable_name = config.application[0].rsplit("/", maxsplit=1)[-1]
         safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", executable_name).strip(".-")
         self.application_name = (safe_name[:64] or "application").lower()
@@ -432,12 +452,24 @@ class XpraSession:
             config.connection,
         )
         self.remote: OwnedRemoteProcess | None = None
+        self.persistent: PersistentSession | None = None
         self.client: asyncio.subprocess.Process | None = None
         self.client_stdout = BoundedTail()
         self.client_stderr = BoundedTail()
         self._client_drains: tuple[asyncio.Task[None], ...] = ()
         self._wrapper: Path | None = None
         self._remote_display: str | None = None
+        self._remote_logs: list[RemoteLogChannel] = []
+
+    async def _subscribe_logs(self, session: str) -> None:
+        channel = RemoteLogChannel(self.master, self.journal, session)
+        self._remote_logs.append(channel)
+        try:
+            await channel.start()
+        except (OSError, LogTransportError) as error:
+            raise SSHError(
+                "remote_log_unavailable", "cannot subscribe to the remote session logs"
+            ) from error
 
     @staticmethod
     def _require_options(output: bytes, options: tuple[str, ...], side: str) -> None:
@@ -462,7 +494,10 @@ class XpraSession:
     def _remote_required_options(self) -> tuple[str, ...]:
         return _option_names(
             _production_server_base_options(),
-            ("--session-name=owned", "--start-child-after-connect=owned"),
+            (
+                "--session-name=owned",
+                f"{'--start-child' if self.config.persistent else '--start-child-after-connect'}=owned",
+            ),
             static_cli_options("server", "lifecycle"),
             production_transport_options("server", self.config.encoding_profile),
             clipboard_options(self.config.clipboard),
@@ -479,19 +514,41 @@ class XpraSession:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                env=xpra_environment(self.config.log_level),
             )
         except OSError as error:
             raise SSHError(
                 "xpra_start_failed", "cannot start the local Xpra client"
             ) from error
+        assert process.stdout is not None and process.stderr is not None
+        output = (bytearray(), bytearray())
+
+        async def capture(stream: asyncio.StreamReader, index: int) -> None:
+            log = XpraLogStream(self.journal, stderr=bool(index), pid=process.pid)
+            try:
+                while chunk := await stream.read(4096):
+                    output[index].extend(
+                        chunk[: max(0, 128 * 1024 - len(output[index]))]
+                    )
+                    log.feed(chunk)
+            finally:
+                log.finish()
+
+        drains = (
+            asyncio.create_task(capture(process.stdout, 0)),
+            asyncio.create_task(capture(process.stderr, 1)),
+        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout
-            )
+            await asyncio.wait_for(process.wait(), timeout=timeout)
         except TimeoutError:
             await _terminate_local(process)
-            return 124, b"", b""
-        return process.returncode or 0, stdout, stderr
+            return 124, bytes(output[0]), bytes(output[1])
+        except asyncio.CancelledError:
+            await _terminate_local(process)
+            raise
+        finally:
+            await asyncio.gather(*drains)
+        return process.returncode or 0, bytes(output[0]), bytes(output[1])
 
     async def _run_mux(
         self, remote_program: str, timeout: float = CAPABILITY_TIMEOUT
@@ -513,7 +570,37 @@ class XpraSession:
             raise SSHError(
                 "xpra_probe_timeout", "remote Xpra probe timed out"
             ) from None
+        except asyncio.CancelledError:
+            await _terminate_local(process)
+            raise
         return process.returncode or 0, stdout, stderr
+
+    async def _run_mux_interactive(self, remote_program: str) -> None:
+        """Give remote sudo a terminal on the same no-fallback SSH master."""
+        await self.master.ensure_ready()
+        descriptor = open_terminal()
+        process = None
+        try:
+            os.set_blocking(descriptor, True)
+            process = await asyncio.create_subprocess_exec(
+                *self.master.mux_transport_argv(),
+                "-tt",
+                "--",
+                self.config.connection.destination,
+                remote_program,
+                stdin=descriptor,
+                stdout=descriptor,
+                stderr=descriptor,
+                start_new_session=True,
+            )
+            if await process.wait() != 0:
+                raise SSHError(
+                    "persistent_linger_failed",
+                    "could not enable remote linger; ask the remote administrator",
+                )
+        finally:
+            await _terminate_local(process)
+            os.close(descriptor)
 
     async def _check_local_capabilities(self) -> None:
         help_status, stdout, stderr = await self._run_local(
@@ -544,10 +631,21 @@ class XpraSession:
 
     async def _check_remote_capabilities(self) -> None:
         status, stdout, stderr = await self._run_mux(
-            "command -v python3 >/dev/null && xpra seamless --help"
+            shlex.join(
+                remote_argv(
+                    ("xpra", "seamless", "--help"),
+                    self.config.log_level,
+                    self.session_id,
+                )
+            )
         )
         if status != 0:
-            raise SSHError("xpra_incompatible", "remote Xpra capability probe failed")
+            detail = self._diagnostic(stderr.decode("utf-8", errors="replace"))
+            raise SSHError(
+                "xpra_incompatible",
+                "remote Xpra capability probe failed"
+                + (f": {detail}" if detail else ""),
+            )
         self._require_options(
             stdout + stderr, self._remote_required_options(), "remote"
         )
@@ -559,6 +657,7 @@ class XpraSession:
             self.session_name,
             self.config.encoding_profile,
             self.config.clipboard,
+            persistent=self.config.persistent,
         )
 
     def _capture_remote_display(self) -> None:
@@ -596,6 +695,8 @@ class XpraSession:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        if self.persistent is not None:
+            argv_sha256 = self.persistent.record["argv_sha256"]
         return shlex.join(
             (
                 "python3",
@@ -628,7 +729,12 @@ class XpraSession:
         deadline = asyncio.get_running_loop().time() + self.config.ready_timeout
         while asyncio.get_running_loop().time() < deadline:
             remote = self.remote
-            if remote is None or remote.returncode is not None:
+            if self.persistent is not None:
+                running = await self.persistent.refresh()
+                self._remote_display = self.persistent.record["display"]
+            else:
+                running = remote is not None and remote.returncode is None
+            if not running:
                 diagnostic = self._remote_diagnostic()
                 message = "remote Xpra exited before becoming ready"
                 if diagnostic:
@@ -661,10 +767,21 @@ class XpraSession:
         )
 
     async def _drain_client(
-        self, stream: asyncio.StreamReader, destination: BoundedTail
+        self,
+        stream: asyncio.StreamReader,
+        destination: BoundedTail,
     ) -> None:
-        while chunk := await stream.read(4096):
-            destination.append(chunk)
+        log = XpraLogStream(
+            self.journal,
+            stderr=destination is self.client_stderr,
+            pid=self.client.pid if self.client is not None else 0,
+        )
+        try:
+            while chunk := await stream.read(4096):
+                destination.append(chunk)
+                log.feed(chunk)
+        finally:
+            log.finish()
 
     async def _start_client(self) -> None:
         try:
@@ -674,6 +791,7 @@ class XpraSession:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
+                env=xpra_environment(self.config.log_level),
             )
         except OSError as error:
             raise SSHError(
@@ -682,10 +800,16 @@ class XpraSession:
         assert self.client.stdout is not None and self.client.stderr is not None
         self._client_drains = (
             asyncio.create_task(
-                self._drain_client(self.client.stdout, self.client_stdout)
+                self._drain_client(
+                    self.client.stdout,
+                    self.client_stdout,
+                )
             ),
             asyncio.create_task(
-                self._drain_client(self.client.stderr, self.client_stderr)
+                self._drain_client(
+                    self.client.stderr,
+                    self.client_stderr,
+                )
             ),
         )
 
@@ -732,7 +856,7 @@ class XpraSession:
         return self._diagnostic(raw)
 
     async def _wait_lifecycle(self) -> int:
-        remote = self.remote
+        remote = self.persistent or self.remote
         client = self.client
         master_process = self.master.process
         assert remote is not None and client is not None and master_process is not None
@@ -779,24 +903,73 @@ class XpraSession:
     async def run(self) -> int:
         """Start, attach, wait, and clean every owned process in order."""
         try:
+            try:
+                self.journal.open()
+            except JournalError as error:
+                raise SSHError("journal_unavailable", str(error)) from None
+            if self.config.log_level in {"debug", "debug-clipboard"}:
+                message = "debug logging is enabled on both hosts; system journals may contain clipboard contents and other sensitive data"
+                self.journal.emit(PRIORITIES["warning"], message)
+            self.journal.emit(PRIORITIES["info"], "checking local Xpra capabilities")
             await self._check_local_capabilities()
+            self.journal.emit(PRIORITIES["info"], "opening the owned SSH master")
             await self.master.start()
             self._wrapper = self.master.create_mux_wrapper("xpra-ssh")
+            await self._subscribe_logs(self.session_id)
+            if self.config.persistent:
+                self.persistent = PersistentSession(
+                    self._run_mux,
+                    self._run_mux_interactive,
+                    self.config.poll_interval,
+                    log_level=self.config.log_level,
+                    journal=self.journal,
+                )
+                session_id = await self.persistent.identify(self.config.application)
+                # Finish the provisional observer before releasing startup logs
+                # under the stable, host/account-qualified persistent identity.
+                await self._remote_logs[-1].close()
+                self._remote_logs.pop()
+                self.session_id = session_id
+                self.journal.flush(session_id)
+                await self._subscribe_logs(session_id)
             await self._check_remote_capabilities()
-            self.remote = OwnedRemoteProcess(
-                self.master,
-                self.server_argv(),
-                heartbeat_interval=self.config.heartbeat_interval,
-                lease_timeout=self.config.lease_timeout,
-                grace_timeout=self.config.grace_timeout,
-            )
-            await self.remote.start()
+            if self.persistent is not None:
+                await self.persistent.start(self.config.application, self.server_argv())
+                self.session_name = self.persistent.record["session_name"]
+            else:
+                self.remote = OwnedRemoteProcess(
+                    self.master,
+                    remote_argv(
+                        self.server_argv(), self.config.log_level, self.session_id
+                    ),
+                    heartbeat_interval=self.config.heartbeat_interval,
+                    lease_timeout=self.config.lease_timeout,
+                    grace_timeout=self.config.grace_timeout,
+                )
+                await self.remote.start()
             await self._wait_ready()
             await self._start_client()
+            self.journal.emit(PRIORITIES["info"], "Xpra client attached")
             return await self._wait_lifecycle()
+        except asyncio.CancelledError:
+            self.journal.emit(PRIORITIES["info"], "session cancelled")
+            raise
+        except SSHError as error:
+            self.journal.emit(PRIORITIES["error"], f"{error.code}: {error.message}")
+            raise ReportedSSHError(error.code, error.message, error.details) from None
+        except Exception as error:  # noqa: BLE001 - public journal diagnostics stay sanitized.
+            self.journal.emit(
+                PRIORITIES["error"], f"session_failed: {type(error).__name__}"
+            )
+            raise ReportedSSHError("session_failed", type(error).__name__) from None
         finally:
             await _terminate_local(self.client)
             await self._finish_client_drains()
             if self.remote is not None:
                 await self.remote.close()
+            for channel in reversed(self._remote_logs):
+                await channel.close()
             await self.master.close()
+            self.journal.flush()
+            self.journal.emit(PRIORITIES["info"], "local session resources closed")
+            self.journal.close()

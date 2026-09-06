@@ -12,12 +12,14 @@ Only Xpra picture, input, clipboard, and control traffic crosses SSH.
 ## Install And Run
 
 The Python distribution requires Linux, CPython 3.13 or 3.14, OpenSSH,
-`false`, a local graphical session, and compatible Xpra packages on both
-systems. Install with pip or pipx after the first release:
+`false`, a local graphical session, and compatible Xpra packages and an
+accessible system journal on both systems. Install with pip or pipx after the
+first release:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.1.1"
-# or: pipx install "elsewindow==0.1.1"
+python3.14 -m pip install "elsewindow==0.2.0"
+# or: pipx install "elsewindow==0.2.0"
+elsewindow --prepare-xpra
 elsewindow --ssh-alias agents-a -- xterm
 ```
 
@@ -38,6 +40,11 @@ make runtime-venv
 ./bin/elsewindow --help
 ```
 
+This one make target prepares the isolated Elsewindow runtime and a separate
+system-Python venv for local Xpra. The latter keeps GTK and native Xpra modules
+in their system packages while installing a hash-locked matching PyOpenGL and
+accelerator pair. Session startup never invokes pip or changes system packages.
+
 Use a direct authority when an OpenSSH alias is not appropriate:
 
 ```bash
@@ -48,13 +55,12 @@ elsewindow \
   -- /opt/application/bin/application
 ```
 
-The default encoding, network, and clipboard policies are `rgb`,
-`gigabit_lan`, and bidirectional `both`. Use `--clipboard=off` to disable
-clipboard synchronization or `--clipboard=to-server` to allow only local to
-remote transfers. Reviewed profile arguments come from the YAML mirrors
-shipped inside the Python package; the session assembler adds the selected
-clipboard and security policy. See [the Xpra guide](doc/xpra.md) for profile,
-hardware, application, and lifecycle details.
+See the [CLI reference](doc/cli.md) for every option, default, and allowed
+value, including encoding/network profiles, clipboard policy, logging, and
+persistence. Reviewed profile arguments come from the packaged YAML mirrors.
+The [Xpra guide](doc/xpra.md) covers hardware, application, and lifecycle
+behavior; the [security model](doc/security.md) explains clipboard and logging
+trust boundaries.
 
 ## Installing The Maintained Xpra Build
 
@@ -92,17 +98,22 @@ APT transaction.
 After the first release, GitHub Releases provide `elsewindow-linux-amd64` and
 `elsewindow-linux-arm64`. These native one-file ELF executables bundle
 Elsewindow, CPython, `ssh-wrapper`, version metadata, and the reviewed YAML
-profiles. They do not bundle OpenSSH, Xpra, Podman, GPU drivers, VA-API, or
+profiles, and the local Xpra setup code and dependency lock. They do not bundle
+OpenSSH, Xpra, Podman, GPU drivers, VA-API, or
 distribution packages. Verify the release's `SHA256SUMS.txt`, make the selected
-file executable, and run `./elsewindow-linux-amd64 --diagnose` (or the arm64
-equivalent) before starting a session.
+file executable, run `./elsewindow-linux-amd64 --prepare-xpra`, then
+`./elsewindow-linux-amd64 --diagnose` (or the arm64 equivalents) before starting
+a session. Preparation uses the system Xpra Python, not the bundled interpreter,
+and needs neither a checkout nor GNU Make. See the
+[setup reference](doc/cli.md#prepare-xpra) for prerequisites and storage.
 
 ## Documentation
 
 - [Rendered documentation site](https://kogeler.github.io/elsewindow/)
   (published by the first reviewed direct `main` push)
 - [Getting started](doc/getting-started.md)
-- [Complete Xpra behavior and options](doc/xpra.md)
+- [Complete CLI reference](doc/cli.md)
+- [Xpra behavior and lifecycle](doc/xpra.md)
 - [Security model](doc/security.md)
 - [Architecture](doc/architecture.md)
 - [Development and validation](doc/development.md)
@@ -118,13 +129,20 @@ file, and advertised `llms.txt` route without network access.
 ## Automatic Live Validation
 
 `make live-test` resolves the newest fork release, builds checksum-bound Ubuntu
-target and Debian client images, and runs detach and abrupt-master-loss cases
+target and Debian client images, and runs ordinary and persistent lifecycle cases
 on a private rootless Podman network. The payload excludes `elsewindow/` source
 and clean-installs the already verified wheel. The harness generates a fresh
-Ed25519 key, performs exactly one authentication per case, verifies a visible
+Ed25519 key, performs exactly one authentication per invocation, verifies a visible
 window and picture updates through the production profile assembler, preserves
 an unrelated session, and removes only its labelled containers and network.
 All wheel, test, and key material enters through validated tar streams; the
 test uses no host bind, data volume, or copy channel.
+
+Persistent cases exercise real systemd user services, linger consent, resumption
+after client/SSH loss, stable application identity and cleanup on application
+exit. The same matrix checks all four local/remote log sources in the local
+journal and terminal, and only remote sources in the server journal, at the
+selected log level. Enable this opt-in mode with
+`--persistent`; see the [CLI reference](doc/cli.md#persistent).
 
 Released under the [MIT License](LICENSE).

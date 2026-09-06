@@ -30,7 +30,7 @@ or foreign-platform artifact is accepted. Their labels come from the public
 
 [`dependency-submission.yml`](../../.github/workflows/dependency-submission.yml)
 runs only on trusted direct `main` changes. Its one job receives
-`contents: write` and submits exactly the six validated lock manifests.
+`contents: write` and submits exactly the eight validated lock manifests.
 [`release.yml`](../../.github/workflows/release.yml) grants OIDC only to the
 PyPI job and `contents: write` only to the GitHub publication job. Its reusable
 CI gate runs only when exact publication-state inspection finds work for the

@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from contextlib import suppress
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
+from importlib.resources import files
 
 from ssh_wrapper.errors import SSHError
 
@@ -35,22 +36,30 @@ from .config import (
     SUPPORTED_NETWORK_PROFILES,
     XpraConfig,
 )
-from .session import XpraSession
+from .journal import DEFAULT_LOG_LEVEL, LOG_LEVELS, PRIORITIES, Journal
+from .session import ReportedSSHError, XpraSession
+from .xpra_runtime import XpraRuntimeError, prepare, prepared_launcher
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the public command-line contract."""
     parser = argparse.ArgumentParser(
         prog="elsewindow",
-        description="Run one new remote GUI application through Xpra over owned SSH.",
+        description="Run or resume a remote GUI application through Xpra over owned SSH.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"
     )
-    parser.add_argument(
+    setup = parser.add_mutually_exclusive_group()
+    setup.add_argument(
         "--diagnose",
         action="store_true",
         help="report bundled versions, profile digests, and local prerequisites",
+    )
+    setup.add_argument(
+        "--prepare-xpra",
+        action="store_true",
+        help="prepare the isolated local Xpra Python environment without opening SSH",
     )
     authority = parser.add_mutually_exclusive_group()
     authority.add_argument("--ssh-alias", help="trusted OpenSSH host alias")
@@ -77,6 +86,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=SUPPORTED_CLIPBOARD_POLICIES,
         default=DEFAULT_CLIPBOARD_POLICY,
         help="clipboard synchronization policy (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--persistent",
+        action="store_true",
+        help="keep the remote application after disconnect and resume by its argv",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=LOG_LEVELS,
+        default=DEFAULT_LOG_LEVEL,
+        help="Elsewindow and Xpra journal level on both hosts (default: %(default)s)",
     )
     parser.add_argument(
         "--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT
@@ -113,11 +133,24 @@ def _diagnose() -> int:
     for label, path in (
         ("live-cli.yml", LIVE_CLI_PATH),
         ("profiles.yml", NETWORK_PROFILES_PATH),
+        ("_persistent_agent.py", files("elsewindow").joinpath("_persistent_agent.py")),
+        ("journal.py", files("elsewindow").joinpath("journal.py")),
+        ("log_transport.py", files("elsewindow").joinpath("log_transport.py")),
+        (
+            "requirements-xpra.txt",
+            files("elsewindow").joinpath("requirements-xpra.txt"),
+        ),
+        (
+            "requirements-xpra-build.txt",
+            files("elsewindow").joinpath("requirements-xpra-build.txt"),
+        ),
     ):
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError as error:
-            print(f"elsewindow: invalid_resource: {label}: {error}", file=sys.stderr)
+        except OSError:
+            print(
+                f"elsewindow: invalid_resource: {label}: not readable", file=sys.stderr
+            )
             failed = True
         else:
             print(f"{label}: sha256:{digest}")
@@ -138,6 +171,19 @@ def _diagnose() -> int:
             failed = True
         else:
             print(f"{command}: {resolved}")
+            if command == "xpra":
+                from pathlib import Path
+
+                try:
+                    prepared_launcher(Path(resolved))
+                except XpraRuntimeError as error:
+                    print(
+                        f"elsewindow: xpra_environment_unprepared: {error}",
+                        file=sys.stderr,
+                    )
+                    failed = True
+                else:
+                    print("xpra-environment: verified")
     return int(failed)
 
 
@@ -151,7 +197,7 @@ async def _run_with_signals(config: XpraConfig) -> int:
             interrupted.set_result(exit_code)
 
     installed: list[signal.Signals] = []
-    for selected in (signal.SIGINT, signal.SIGTERM):
+    for selected in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(selected, stop, 128 + selected)
         except NotImplementedError:
@@ -180,7 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Validate configuration, run one session, and return a stable exit code."""
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.diagnose:
+    if args.diagnose or args.prepare_xpra:
         if (
             args.ssh_alias is not None
             or args.host is not None
@@ -188,25 +234,53 @@ def main(argv: Sequence[str] | None = None) -> int:
             or args.port != 22
             or args.application
         ):
-            parser.error("--diagnose cannot be combined with a session authority")
-        return _diagnose()
+            parser.error(
+                "setup and diagnosis cannot be combined with a session authority"
+            )
+        if args.diagnose:
+            return _diagnose()
+        from pathlib import Path
+
+        try:
+            xpra = shutil.which("xpra")
+            if xpra is None:
+                raise XpraRuntimeError(
+                    "install the supported system Xpra packages first"
+                )
+            prepare(Path(xpra))
+        except (OSError, ValueError, XpraRuntimeError) as error:
+            detail = (
+                str(error)
+                if isinstance(error, XpraRuntimeError)
+                else "cannot prepare the local Xpra environment"
+            )
+            print(f"elsewindow: xpra_environment_unprepared: {detail}", file=sys.stderr)
+            return 1
+        print("Local Xpra Python environment is ready.")
+        return 0
     if args.ssh_alias is None and args.host is None:
         parser.error("provide either --ssh-alias or --host")
     try:
         config = XpraConfig.from_namespace(args)
     except SSHError as error:
+        journal = Journal(args.log_level, "client")
+        journal.emit(PRIORITIES["error"], f"{error.code}: {error.message}")
+        journal.close()
         parser.error(error.message)
 
     try:
         return asyncio.run(_run_with_signals(config))
     except KeyboardInterrupt:
         return 130
+    except ReportedSSHError:
+        return 1
     except SSHError as error:
-        print(f"elsewindow: {error.code}: {error.message}", file=sys.stderr)
+        journal = Journal(config.log_level, "client")
+        journal.emit(PRIORITIES["error"], f"{error.code}: {error.message}")
+        journal.close()
         return 1
     except Exception as error:  # noqa: BLE001 - public diagnostics stay sanitized.
-        print(
-            f"elsewindow: session_failed: {type(error).__name__}",
-            file=sys.stderr,
-        )
+        journal = Journal(config.log_level, "client")
+        journal.emit(PRIORITIES["error"], f"session_failed: {type(error).__name__}")
+        journal.close()
         return 1

@@ -22,6 +22,14 @@ The five maintainer environments are separated by responsibility, while
 - `venv-standalone` for native PyInstaller builds;
 - `venv-docs` for strict MkDocs rendering.
 
+`make runtime-venv` also depends on `make xpra-venv`. This separate environment
+uses the system Xpra Python with system site-packages; only its hash-locked
+PyOpenGL pair overrides distribution Python modules. The runtime-only bootstrap
+target `make runtime-python-venv` is used by the container harness, which does
+not need Xpra installed on its orchestration host. Every session validates the
+current Xpra lock, interpreter identity, versions, installed file hashes and
+launcher. Explicit setup alone may repair an owned stale environment.
+
 `make runtime-venv` and `make dev-venv` revalidate the installed wrapper and
 its distribution version, not just the lock marker. If a Python transition makes an existing
 environment unable to import its packages, the owning target rebuilds that
@@ -30,6 +38,11 @@ environment from the hash lock.
 The unit suite covers public configuration, strict profile parsing, complete
 YAML-to-argv assembly, lifecycle failures and cleanup, public Xpra command
 integration, release validation, image provenance, and the installer harness.
+Journal tests use private Unix datagram receivers, including the isolated
+remote source bootstrap, and never send unit-test records to the host journal.
+The [CLI reference](cli.md) is the single option reference. Tests compare its
+complete option inventory, defaults, and choices with the production parser;
+the profile tables are checked against the packaged YAML mirrors.
 
 Run the destructive package acceptance only on a host with rootless Podman:
 
@@ -61,8 +74,9 @@ and installs through APT.
 
 Capability validation requires the native libva encoder and decoder, libyuv,
 GTK OpenGL, common/server assets, X11 bindings, and Ubuntu Wayland modules in
-their owning packages. APT explicitly requests `libva-drm2` and
-`python3-opengl`; post-install verification imports every required module. Any
+their owning packages. APT explicitly requests `libva-drm2`,
+`python3-opengl`, and `python3-venv`; post-install verification imports every
+required module. Any
 missing, duplicate, symlinked, or unsafe payload fails before mutation.
 
 Resolve and prepare the latest release-backed client and target images with:
@@ -84,11 +98,48 @@ make live-test
 
 The full test builds and verifies the wheel, excludes package source from its
 payload, clean-installs the wheel as the disposable client user, and proves
-that installed import before the real cases. It uses the same production
+that installed import before the real cases. It prepares the Xpra venv through
+the installed command, using hash-verified wheels cached in the immutable client
+image and no access to PyPI from the runtime network. The public OpenGL command
+must report the matching accelerator and `zerocopy=True`. It uses the same production
 profile assembler as the launcher and proves a remote Wayland application
 window, picture updates, one authentication per invocation, normal detach,
 abrupt SSH-master loss, selective remote cleanup, and complete removal of
-labelled Podman resources. Codec and GPU correctness remain the maintained
+labelled Podman resources. The same target boots real systemd/logind, without
+privileged mode or a wider ID namespace. The matrix first refuses and then
+approves linger through a real terminal and the production mux. Persistent
+cases reuse the same window, process-identity and profile checks across detach,
+client kill, deliberate master closure, master kill and cancellation. They
+wait beyond the ordinary heartbeat lease with all connections closed, compare
+the same application/server PID and service token after each reconnect, and
+check cleanup after application exit with both zero and nonzero status.
+Both guests run real journald. The confined client adds only a bounded private
+runtime tmpfs; its journal daemon has no capabilities, and the product remains
+non-root. A container-only bounded journal policy retains the complete matrix
+for exact comparisons, without changing any host's journal policy.
+The existing cases exercise the warning default, info lifecycle
+records and clipboard debugging on both hosts. They compare local journal
+messages with stdout/stderr, including severity routing, and verify native
+record identity and filtering throughout ordinary and persistent lifetimes.
+The client must contain all four source labels, while the target contains
+only remote sources; forwarded records must match originals including source
+PID. The persistent case also loses a log-only SSH channel and proves the
+application identity survives. Unit tests exercise bounded IPC backpressure,
+frame rejection, subscription cleanup and resubscription without history.
+Every journal message must visibly contain its native session ID, shared by
+both peers and stable across persistent reconnects. Real isolated subprocess
+tests complement a simultaneous second ordinary session in the existing live
+detach case: each authenticates once, has its own ID and journal records, and
+closing one leaves the other application alive. The isolated subprocess
+tests cover simultaneous subscribers for the same and different sessions,
+including one observer leaving without affecting the others; identity tests
+separate remote machines and accounts and cover deferred startup failures.
+The graphical fixture inherits at most two available CPUs before launching its
+public test application, bounding native worker pools on high-core-count hosts
+without relaxing container process limits or changing production Xpra profiles.
+Unrelated resources must survive and every invocation still authenticates once.
+The disposable account has narrowly scoped sudo permission only for its own
+linger activation. Codec and GPU correctness remain the maintained
 fork's responsibility.
 
 Do not add internal Xpra source probes, downstream patch identifiers, or
@@ -125,6 +176,14 @@ make smoke-standalone
 CI performs the standalone commands independently on native amd64 and arm64
 runners. `make checksums` deliberately fails until all four release artifacts
 are assembled in `dist/`; it then writes the one exact release inventory.
+Wheel, sdist and standalone smoke share the same environment-setup acceptance:
+outside the checkout, install real locked PyPI wheels without an index, execute
+an argv fixture through the prepared interpreter, reject changed installed
+bytes, then repair them explicitly using the hash-verified source archive and
+locked temporary builder without network access. A compiler and system Python
+development headers are required for these smoke tests, even on amd64.
+Frozen smoke also exercises independent
+invocations so an environment cannot depend on a previous extraction directory.
 
 Render and audit the documentation site with:
 

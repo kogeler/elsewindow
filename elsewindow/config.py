@@ -14,6 +14,8 @@ from ssh_wrapper.connection import ConnectionSpec, resolve_program
 from ssh_wrapper.errors import SSHError
 
 from . import live_config
+from .journal import DEFAULT_LOG_LEVEL, LOG_LEVELS
+from .xpra_runtime import XpraRuntimeError, prepared_launcher
 
 DEFAULT_CONNECT_TIMEOUT = 120.0
 DEFAULT_READY_TIMEOUT = 45.0
@@ -42,6 +44,13 @@ def _bounded_float(name: str, value: float, minimum: float = 0.1) -> float:
     return value
 
 
+def _local_xpra() -> Path:
+    try:
+        return prepared_launcher(resolve_program("xpra"))
+    except XpraRuntimeError as error:
+        raise SSHError("xpra_environment_unprepared", str(error)) from error
+
+
 @dataclass(frozen=True, slots=True)
 class XpraConfig:
     """All startup policy for one independently owned GUI session."""
@@ -61,6 +70,8 @@ class XpraConfig:
     ssh_path: Path
     false_path: Path
     xpra_path: Path
+    log_level: str = DEFAULT_LOG_LEVEL
+    persistent: bool = False
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> XpraConfig:
@@ -120,6 +131,8 @@ class XpraConfig:
                 "clipboard policy must be one of: "
                 f"{', '.join(SUPPORTED_CLIPBOARD_POLICIES)}",
             )
+        if args.log_level not in LOG_LEVELS:
+            raise SSHError("invalid_configuration", "the log level is invalid")
         heartbeat_interval = _bounded_float(
             "heartbeat interval", args.heartbeat_interval
         )
@@ -144,7 +157,9 @@ class XpraConfig:
             grace_timeout=_bounded_float("cleanup grace", args.cleanup_grace),
             ssh_path=resolve_program("ssh"),
             false_path=resolve_program("false"),
-            xpra_path=resolve_program("xpra"),
+            xpra_path=_local_xpra(),
+            log_level=args.log_level,
+            persistent=args.persistent,
         )
 
     @property

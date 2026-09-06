@@ -13,7 +13,8 @@ only Xpra picture, input, clipboard, and control traffic crosses SSH.
 
 - [Install and run Elsewindow](getting-started.md) on Linux with CPython 3.13
   or 3.14.
-- Choose and review [Xpra behavior and network profiles](xpra.md).
+- Find every option, default, and profile in the [CLI reference](cli.md).
+- Review [Xpra behavior and lifecycle](xpra.md).
 - Understand the [security and cleanup boundary](security.md).
 - Read the [architecture](architecture.md) before changing lifecycle code.
 

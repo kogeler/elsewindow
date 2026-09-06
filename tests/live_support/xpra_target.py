@@ -15,6 +15,9 @@ OWNED_TITLE = "Elsewindow Live Test"
 REMOTE_APP = "/home/xpra-test/elsewindow-live-app"
 OWNED_MARKER = "/tmp/elsewindow-live-owned"
 ABRUPT_MARKER = "/tmp/elsewindow-live-abrupt"
+PERSISTENT_MARKER = "/tmp/elsewindow-live-persistent"
+PERSISTENT_DISCONNECTS = ("detach", "client-kill", "master-close", "abrupt", "cancel")
+PERSISTENT_CONNECTIONS = len(PERSISTENT_DISCONNECTS) + 2
 UNRELATED_PROCESS_MARKER = "/tmp/elsewindow-live-unrelated-process"
 
 REMOTE_APP_SOURCE = b"""#!/bin/sh
@@ -23,7 +26,13 @@ set -eu
 marker=$1
 title=$2
 umask 077
-GDK_BACKEND=wayland python3 -m xpra.gtk.examples.window_title "$title" &
+# Bound native graphics worker pools on high-core-count CI hosts without
+# relaxing container process limits or changing the production Xpra profile.
+GDK_BACKEND=wayland python3 -c '
+import os, sys
+os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])
+os.execv(sys.executable, [sys.executable, "-m", "xpra.gtk.examples.window_title", sys.argv[1]])
+' "$title" &
 child=$!
 
 cleanup() {
@@ -32,13 +41,20 @@ cleanup() {
         kill "$child" 2>/dev/null || true
         wait "$child" 2>/dev/null || true
     fi
-    rm -f -- "$marker"
+    rm -f -- "$marker" "$marker.exit"
 }
 
 trap cleanup EXIT
 trap 'exit 0' HUP INT TERM
 start=$(awk '{print $22}' "/proc/$child/stat")
 printf '%s %s %s\n' "$child" "$start" "${WAYLAND_DISPLAY:?}" > "$marker"
+while kill -0 "$child" 2>/dev/null; do
+    if test -f "$marker.exit"; then
+        read -r status < "$marker.exit"
+        exit "$status"
+    fi
+    sleep 0.1
+done
 wait "$child"
 """
 
@@ -180,6 +196,15 @@ def install_xpra_fixture(resources: LiveResources, target: str) -> None:
         f'chown xpra-test:xpra-test "{REMOTE_APP}"; chmod 0700 "{REMOTE_APP}"',
         purpose="installing the Xpra live application",
         input_data=REMOTE_APP_SOURCE,
+    )
+    podman_exec(
+        resources,
+        target,
+        "sh",
+        "-ceu",
+        "umask 077; cat > /etc/sudoers.d/elsewindow-live-linger; chmod 0440 /etc/sudoers.d/elsewindow-live-linger; visudo -cf /etc/sudoers.d/elsewindow-live-linger",
+        purpose="allowing only fixture-account linger activation",
+        input_data=b"xpra-test ALL=(root) NOPASSWD: /usr/bin/loginctl enable-linger 1001\n",
     )
 
 

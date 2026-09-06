@@ -37,4 +37,6 @@ if ! PYTHONPATH="${repository_dir}" \
     exit 1
 fi
 
-PYTHONPATH="${repository_dir}" exec "${venv_python}" -m elsewindow "$@"
+PYTHONPATH="${repository_dir}" \
+ELSEWINDOW_XPRA_VENV="${repository_dir}/venv-xpra" \
+exec "${venv_python}" -m elsewindow "$@"

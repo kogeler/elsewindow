@@ -9,10 +9,13 @@ application's source tree.
 
 - `README.md` is the public overview and documentation index. `mkdocs.yml`,
   `doc/`, `doc/site/`, and `tools/audit_docs_site.py` own the rendered site and
-  its offline publication audit.
+  its offline publication audit. `doc/cli.md` is the complete CLI option
+  reference; keep its inventory, defaults, and allowed values aligned with
+  the production parser.
 - `elsewindow/` is the typed installed package. `live-cli.yml` and
   `profiles.yml` are package data and the sole mirrored Xpra profile authority;
-  `session.py` owns the explicit project security and clipboard policy options.
+  `session.py` owns explicit project security options and applies the reviewed
+  clipboard policy from the mirrored configuration to both peers.
 - `bin/elsewindow` is the repository launcher; `python -m elsewindow` and the
   installed console command are the other supported entry routes.
 - `tools/install_xpra_release.py` is the standalone verified Xpra package
@@ -42,6 +45,13 @@ application's source tree.
 - `requirements.in` and the five `requirements-*.in` files own exact direct
   dependency versions and are the native Dependabot inputs. Their matching
   `requirements*.txt` files are generated hash locks. Never hand-edit a lock.
+- `elsewindow/requirements-xpra.in` and its generated hash lock own the separate
+  local Xpra environment's matched PyOpenGL additions. Ship this lock in every
+  artifact; never install these dependencies into the Elsewindow runtime.
+- `elsewindow/requirements-xpra-build.in` and its generated hash lock own only
+  temporary accelerator build tools. A missing binary wheel may use the
+  hash-verified accelerator source archive without unpinned build isolation;
+  remove the builder packages before activating the runtime environment.
 
 ## Required runtime contracts
 
@@ -51,8 +61,22 @@ application's source tree.
   every auxiliary Xpra data and device feature except the reviewed clipboard
   policy. Apply `off`, `to-server`, or `both` explicitly to both peers and
   default to `both`.
-- Start the remote server and application in one heartbeat-supervised process
-  group. Cleanup targets only recorded owned resources.
+- Ordinary sessions run the remote server and application in one
+  heartbeat-supervised process group. Explicit `--persistent` sessions run in
+  an owned transient user systemd service and survive client and SSH loss.
+  Check linger on each invocation and offer to enable it only with interactive
+  consent. Cleanup targets only recorded owned resources.
+- Aggregate explicitly labeled local/remote Elsewindow and Xpra records in
+  the local journal and terminal. Forward new remote records through owned
+  SSH mux channels; the remote journal contains only remote sources. Apply one
+  shared session ID to every message and native record on both hosts. Keep
+  ordinary IDs unique and persistent IDs stable across reconnects and scoped
+  to the remote machine, account, and application; isolate concurrent observers.
+  Apply one `--log-level` to both peers, default to `warning`, with identical terminal
+  filtering. Log observers never reconnect or own application lifetime, and
+  their queues and frames are bounded. Clipboard debugging uses
+  `--log-level=debug-clipboard`. Journald failures must
+  not shorten an already running persistent application's lifetime.
 - Before changing an Xpra argument, compare `elsewindow/live-cli.yml` and
   `elsewindow/profiles.yml` byte-for-byte with the current canonical files in
   [`kogeler/xpra:develop/fork-maintenance/`](https://github.com/kogeler/xpra/tree/develop/fork-maintenance/).
@@ -62,6 +86,11 @@ application's source tree.
 - Keep package installation separate from startup. Launchers never modify
   system packages and replace inherited `PYTHONPATH` so owned source and the
   prepared PyPI dependency cannot be shadowed.
+- `make runtime-venv` prepares both the isolated Elsewindow environment and a
+  separate system-Python Xpra venv. Installed and standalone commands expose
+  explicit `--prepare-xpra` setup. Startup only revalidates the current lock,
+  interpreter and installed bytes; all local Xpra commands use its owned
+  launcher. Never leak PyInstaller's private libraries into system tools.
 - Import `ssh_wrapper` only from the prepared environment. Do not vendor it,
   add another import path, or build a replacement wheel here.
 - Treat the maintained Xpra fork release and its live matrices as the authority
@@ -80,7 +109,7 @@ application's source tree.
 - Package selection is the symmetric consumed dependency closure. Validate the
   native libva encoder and decoder, libyuv, GTK OpenGL, common/server assets,
   X11 bindings, and Ubuntu Wayland modules in their owning DEBs. Install exact
-  local DEBs with `libva-drm2` and `python3-opengl` through APT. Never use
+  local DEBs with `libva-drm2`, `python3-opengl`, and `python3-venv` through APT. Never use
   `dpkg -i`, `autoremove`, or an added Xpra APT source.
 - Every project-owned Podman transfer uses the bounded payload pipe. Do not add
   bind mounts, named data volumes, or `podman cp`.
@@ -92,6 +121,8 @@ application's source tree.
   sufficient; do not restore the legacy GID 65534 or widen the namespace.
 - The live harness has one automatic route using both immutable release-backed
   images, the production profile assembler, and a newly generated Ed25519 key.
+  Its same systemd-backed target covers ordinary cleanup and persistent
+  linger consent, disconnect/resume identity, and application-exit cleanup.
 - Installer acceptance and image preparation resolve the newest valid fork
   package release during each run. Never require a predecessor or retained
   release history as a gate input.
@@ -124,7 +155,7 @@ untracked maintained files. Never select inputs from the Git index, require a
 commit, derive normalization from commit metadata, or persist a successful
 gate result as authority for a later run. Dependency environments may cache
 installed tools only when their complete current lock is revalidated before
-use. Dependabot updates only the six `requirements*.in` inputs and their
+use. Dependabot updates only the eight maintained requirements inputs and their
 matching pip-compile locks; keep `pyproject.toml` excluded from its pip
 manifests and both local resolver stages aligned with Dependabot's resolver.
 When the operator supplies a local reference checkout, inspect that checkout
@@ -147,8 +178,8 @@ compatibility. Run
 acceptance only through `make xpra-installer-test`; it uses disposable
 containers and never changes host package inventory.
 
-After changing a direct dependency in `requirements*.in`, run `make lock` and
-review all six generated locks. Use `make refresh-dependencies` only for an
+After changing a direct dependency in any requirements input, run `make lock` and
+review all eight generated locks. Use `make refresh-dependencies` only for an
 intentional whole-tree upgrade.
 
 Use `apply_patch` for source edits and preserve unrelated work. Never create a

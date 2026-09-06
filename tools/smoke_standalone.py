@@ -14,6 +14,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from tools.smoke_xpra_runtime import smoke_xpra_runtime
 
 
 class StandaloneSmokeError(RuntimeError):
@@ -40,7 +43,7 @@ def _run(
     return completed
 
 
-def smoke(artifact: Path, *, root: Path) -> None:
+def smoke(artifact: Path, *, root: Path, wheels: Path) -> None:
     """Run public standalone routes with hostile cwd and import state."""
     artifact = artifact.resolve()
     if not artifact.is_file() or not os.access(artifact, os.X_OK):
@@ -80,7 +83,10 @@ def smoke(artifact: Path, *, root: Path) -> None:
             "--host",
             "--encoding-profile",
             "--network-profile",
+            "--persistent",
+            "--log-level",
             "--diagnose",
+            "--prepare-xpra",
         ):
             if option not in help_output.stdout:
                 raise StandaloneSmokeError(f"standalone help is missing {option}")
@@ -104,7 +110,15 @@ def smoke(artifact: Path, *, root: Path) -> None:
         )
         if "ssh-wrapper: 0.1.0" not in diagnosis.stdout:
             raise StandaloneSmokeError("bundled ssh-wrapper identity differs")
-        for resource in ("live-cli.yml", "profiles.yml"):
+        for resource in (
+            "live-cli.yml",
+            "profiles.yml",
+            "_persistent_agent.py",
+            "journal.py",
+            "log_transport.py",
+            "requirements-xpra.txt",
+            "requirements-xpra-build.txt",
+        ):
             digest = hashlib.sha256(
                 (root / "elsewindow" / resource).read_bytes()
             ).hexdigest()
@@ -117,16 +131,24 @@ def smoke(artifact: Path, *, root: Path) -> None:
             )
             if expected_error not in diagnosis.stderr:
                 raise StandaloneSmokeError(f"missing {command} diagnostic differs")
+        smoke_xpra_runtime(
+            [str(artifact)], root=temporary, wheels=wheels, environment=environment
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--dependency-dist", type=Path, required=True)
     arguments = parser.parse_args()
     try:
-        smoke(arguments.artifact, root=arguments.root.resolve())
-    except (OSError, StandaloneSmokeError, subprocess.SubprocessError) as error:
+        smoke(
+            arguments.artifact,
+            root=arguments.root.resolve(),
+            wheels=arguments.dependency_dist.resolve(),
+        )
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"standalone smoke failed: {error}", file=sys.stderr)
         return 1
     print(f"Standalone smoke passed: {arguments.artifact.name}")
