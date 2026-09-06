@@ -44,6 +44,10 @@ This one make target prepares the isolated Elsewindow runtime and a separate
 system-Python venv for local Xpra. The latter keeps GTK and native Xpra modules
 in their system packages while installing a hash-locked matching PyOpenGL and
 accelerator pair. Session startup never invokes pip or changes system packages.
+Both environments are selected automatically beneath `.venvs/<machine-user-key>/`,
+so each machine prepares its own Python and native additions in a shared checkout.
+See [checkout setup](doc/getting-started.md#prepare-a-source-checkout) for migration
+and system-command behavior.
 
 Use a direct authority when an OpenSSH alias is not appropriate:
 

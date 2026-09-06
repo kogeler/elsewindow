@@ -398,9 +398,9 @@ def test_controller_rechecks_linger_and_never_emits_stop(
     ]
 
 
-@pytest.mark.parametrize("exit_code", [0, 23])
-def test_supervisor_publishes_owned_pid_display_and_cleans_after_child_exit(
-    registry: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
+@pytest.mark.parametrize("exit_code", [0, 23, None])
+def test_supervisor_reaps_notification_bus_and_cleans_after_exit_or_bus_failure(
+    registry: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int | None
 ) -> None:
     key, token = "a" * 64, "b" * 32
     record = {
@@ -413,7 +413,11 @@ def test_supervisor_publishes_owned_pid_display_and_cleans_after_child_exit(
         "server": [
             sys.executable,
             "-c",
-            f"import sys,time;print('wayland-4',flush=True);time.sleep(0.1);sys.exit({exit_code})",
+            (
+                "import os,sys,time;from pathlib import Path;"
+                "Path('bus-pid').write_text(os.environ['DBUS_SESSION_BUS_PID']);"
+                f"print('wayland-4',flush=True);time.sleep(0.1);sys.exit({exit_code})"
+            ),
         ],
     }
     agent.write_record(registry, record)
@@ -427,20 +431,34 @@ def test_supervisor_publishes_owned_pid_display_and_cleans_after_child_exit(
     monkeypatch.setattr(agent, "write_record", capture)
     monkeypatch.setenv("INVOCATION_ID", "c" * 32)
     monkeypatch.chdir(registry)
+    if exit_code is None:
+        monkeypatch.setattr(
+            "elsewindow.session_bus.DBUS_DAEMON", str(registry / "missing-daemon")
+        )
     signals = {
         selected: signal.getsignal(selected)
         for selected in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
     }
     try:
-        agent.serve({"key": key, "token": token})
+        if exit_code is None:
+            with pytest.raises(agent.AgentError) as caught:
+                agent.serve({"key": key, "token": token})
+            assert caught.value.code == "notification_bus_unavailable"
+        else:
+            agent.serve({"key": key, "token": token})
     finally:
         for selected, handler in signals.items():
             signal.signal(selected, handler)
     assert agent.read_record(registry, key) is None
+    if exit_code is None:
+        assert not writes
+        assert not (registry / "bus-pid").exists()
+        return
     assert writes[-1]["display"] == "wayland-4"
     assert writes[-1]["worker_start"] == agent.process_start(os.getpid())
     assert writes[-1]["invocation"] == "c" * 32
     assert agent.process_start(writes[-1]["xpra_pid"]) == ""
+    assert agent.process_start(int((registry / "bus-pid").read_text())) == ""
 
 
 def test_linger_queries_and_activation_are_uid_scoped(

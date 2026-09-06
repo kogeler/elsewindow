@@ -14,10 +14,15 @@ application's source tree.
   the production parser.
 - `elsewindow/` is the typed installed package. `live-cli.yml` and
   `profiles.yml` are package data and the sole mirrored Xpra profile authority;
-  `session.py` owns explicit project security options and applies the reviewed
-  clipboard policy from the mirrored configuration to both peers.
+  `session.py` owns explicit project security and GUI defaults and applies the
+  reviewed clipboard policy from the mirrored configuration to both peers.
+  `session_bus.py` owns the private foreground remote notification bus.
 - `bin/elsewindow` is the repository launcher; `python -m elsewindow` and the
   installed console command are the other supported entry routes.
+- `elsewindow/machine.py` selects the shared machine/user namespace for all
+  Make and repository-launcher venvs beneath `.venvs/`, and for default installed
+  Xpra environments. Keep its bootstrap standard-library-only, fail closed on
+  invalid OS identity, and never reuse or remove another machine's environments.
 - `tools/install_xpra_release.py` is the standalone verified Xpra package
   installer for Debian 13 and Ubuntu 26.04.
 - `tools/prepare_xpra_images.py` prepares release-backed client and target
@@ -58,9 +63,16 @@ application's source tree.
 - Perform one deliberate OpenSSH authentication and use only channels backed
   by the owned master. Never reconnect after master loss.
 - Open no forwarding or Xpra TCP listener. Disable automatic reconnection and
-  every auxiliary Xpra data and device feature except the reviewed clipboard
-  policy. Apply `off`, `to-server`, or `both` explicitly to both peers and
+  every auxiliary Xpra data and device feature except notifications and the
+  reviewed clipboard policy. Keep ordinary cursor, wheel, keyboard-state,
+  modal-window, DPI and initially unscaled client-scaling behavior enabled.
+  Apply `off`, `to-server`, or `both` explicitly to both peers and
   default to `both`.
+- Forward application notifications by default using a private foreground
+  D-Bus daemon inside each owned remote process group or persistent cgroup.
+  Never adopt a desktop/user bus or enable Xpra D-Bus control or bus autolaunch.
+  Load the client's tray helper required by the current notification presenter,
+  but keep server-side application tray forwarding and Xpra's own tray disabled.
 - Ordinary sessions run the remote server and application in one
   heartbeat-supervised process group. Explicit `--persistent` sessions run in
   an owned transient user systemd service and survive client and SSH loss.
@@ -109,7 +121,8 @@ application's source tree.
 - Package selection is the symmetric consumed dependency closure. Validate the
   native libva encoder and decoder, libyuv, GTK OpenGL, common/server assets,
   X11 bindings, and Ubuntu Wayland modules in their owning DEBs. Install exact
-  local DEBs with `libva-drm2`, `python3-opengl`, and `python3-venv` through APT. Never use
+  local DEBs with `libva-drm2`, `python3-opengl`, `python3-venv`, `dbus-daemon`,
+  and `python3-dbus` through APT. Never use
   `dpkg -i`, `autoremove`, or an added Xpra APT source.
 - Every project-owned Podman transfer uses the bounded payload pipe. Do not add
   bind mounts, named data volumes, or `podman cp`.

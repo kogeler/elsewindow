@@ -135,6 +135,7 @@ def _diagnose() -> int:
         ("profiles.yml", NETWORK_PROFILES_PATH),
         ("_persistent_agent.py", files("elsewindow").joinpath("_persistent_agent.py")),
         ("journal.py", files("elsewindow").joinpath("journal.py")),
+        ("session_bus.py", files("elsewindow").joinpath("session_bus.py")),
         ("log_transport.py", files("elsewindow").joinpath("log_transport.py")),
         (
             "requirements-xpra.txt",

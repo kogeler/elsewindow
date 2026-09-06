@@ -72,9 +72,32 @@ SERVER_RUNTIME_PATHS = {
     "--socket-dirs": REMOTE_SOCKET_DIR,
     "--sessions-dir": REMOTE_SESSIONS_DIR,
 }
+# The canonical live base is intentionally minimal. Restore ordinary GUI
+# semantics without changing its transport policy or unrelated auxiliary I/O.
+SERVER_GUI_OPTIONS = (
+    "--cursors=yes",
+    "--dpi=0",
+    "--notifications=yes",
+)
+CLIENT_GUI_OPTIONS = (
+    *SERVER_GUI_OPTIONS,
+    "--mousewheel=on",
+    "--keyboard-sync=yes",
+    "--modal-windows=yes",
+    "--desktop-scaling=on",
+    # The fork's notification presenter uses a helper from this client module.
+    # Server-side tray forwarding remains explicitly disabled below.
+    "--system-tray=yes",
+)
+NOTIFICATION_BUS_OPTIONS = (
+    "--dbus=keep",
+    "--dbus-launch=no",
+    "--dbus-control=no",
+)
 SERVER_SECURITY_OPTIONS = (
     "--start-new-commands=no",
-    "--dbus=no",
+    *NOTIFICATION_BUS_OPTIONS,
+    "--system-tray=no",
     "--mdns=no",
     "--ssh-upgrade=no",
     "--audio=no",
@@ -83,9 +106,9 @@ SERVER_SECURITY_OPTIONS = (
     "--file-transfer=no",
     "--open-files=no",
     "--open-url=no",
-    "--notifications=no",
 )
 CLIENT_SECURITY_OPTIONS = (
+    *NOTIFICATION_BUS_OPTIONS,
     "--title=@title@",
     "--remote-logging=no",
     "--tray=no",
@@ -96,7 +119,6 @@ CLIENT_SECURITY_OPTIONS = (
     "--file-transfer=no",
     "--open-files=no",
     "--open-url=no",
-    "--notifications=no",
 )
 
 
@@ -235,6 +257,7 @@ def build_server_argv(
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
         *clipboard_options(clipboard),
+        *SERVER_GUI_OPTIONS,
         *SERVER_SECURITY_OPTIONS,
     )
 
@@ -488,6 +511,7 @@ class XpraSession:
             network_profile(self.config.network_profile).client_options(),
             production_transport_options("client", self.config.encoding_profile),
             clipboard_options(self.config.clipboard),
+            CLIENT_GUI_OPTIONS,
             CLIENT_SECURITY_OPTIONS,
         )
 
@@ -501,6 +525,7 @@ class XpraSession:
             static_cli_options("server", "lifecycle"),
             production_transport_options("server", self.config.encoding_profile),
             clipboard_options(self.config.clipboard),
+            SERVER_GUI_OPTIONS,
             SERVER_SECURITY_OPTIONS,
         )
 
@@ -722,6 +747,7 @@ class XpraSession:
             *network_profile(self.config.network_profile).client_options(),
             *production_transport_options("client", self.config.encoding_profile),
             *clipboard_options(self.config.clipboard),
+            *CLIENT_GUI_OPTIONS,
             *CLIENT_SECURITY_OPTIONS,
         ]
 
@@ -940,7 +966,10 @@ class XpraSession:
                 self.remote = OwnedRemoteProcess(
                     self.master,
                     remote_argv(
-                        self.server_argv(), self.config.log_level, self.session_id
+                        self.server_argv(),
+                        self.config.log_level,
+                        self.session_id,
+                        with_session_bus=True,
                     ),
                     heartbeat_interval=self.config.heartbeat_interval,
                     lease_timeout=self.config.lease_timeout,

@@ -9,14 +9,30 @@ One invocation owns one foreground OpenSSH ControlMaster. Every secondary
 operation requires its mux socket and is configured so it cannot authenticate
 or reconnect independently. OpenSSH forwarding, agent sharing, X11 forwarding,
 and configured local or remote commands are disabled. Xpra TCP, HTML, SSH
-upgrade, audio, webcam, printing, file transfer, URL opening, notifications,
+upgrade, audio, webcam, printing, file transfer, URL opening,
 and automatic reconnection are disabled.
 
-Clipboard synchronization is the only auxiliary data channel that can be
-enabled. The [clipboard policy](cli.md#clipboard) defaults to bidirectional
+Application notifications and clipboard synchronization are the reviewed
+auxiliary data channels. Notifications are forwarded by default and can expose
+remote application titles, message bodies and icons on the local desktop;
+notification action/close responses return only through the owned Xpra channel.
+The [clipboard policy](cli.md#clipboard) defaults to bidirectional
 synchronization. Clipboard data is visible to the trusted remote account and
 application; narrow or disable synchronization when the local clipboard may
 contain data that should not cross that trust boundary.
+
+Each remote session owns a separate foreground `dbus-daemon` on a private Unix
+socket. It never adopts the account's desktop/user bus or forwards arbitrary
+D-Bus traffic. The daemon inherits the ordinary heartbeat process group or the
+persistent service cgroup and is explicitly reaped by the session supervisor.
+Xpra preserves only this supplied bus, does not launch another, and keeps
+D-Bus remote control disabled. Concurrent sessions have distinct buses;
+persistent reconnects retain the application's original bus.
+The local Xpra client uses its existing desktop bus to present notifications;
+its D-Bus control and bus autolaunch are also disabled.
+The current fork's notification presenter requires its client tray helper module.
+Elsewindow loads that module but explicitly disables server-side application tray
+forwarding and keeps Xpra's own tray icon hidden.
 
 Both targeted clipboard and general [debug logging](cli.md#log-level) can
 include sensitive data. Both choices warn; `warning` is the default. Persistent
@@ -95,6 +111,17 @@ the frozen launcher also restores the host native-library search path before
 starting system tools. The selected local user remains trusted to control
 their own environment and installed-file metadata.
 
+Default environment paths are scoped to the local machine and UID, including
+installed and standalone Xpra environments under shared XDG data directories.
+The namespace uses HMAC-SHA-256 with a fixed application-specific key, following
+the [systemd machine-ID guidance](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html).
+Neither the raw `/etc/machine-id` value nor a substring is placed in directory
+names or diagnostics. Missing, invalid, or uninitialized IDs fail closed;
+setup does not change the OS identity or fall back to another host's venv.
+An explicit Xpra directory override must itself be kept host-local. This is
+environment isolation, not protection against another trusted user with write
+access to the checkout or against systems cloned with identical machine IDs.
+
 The [diagnostic command](cli.md#informational-commands) performs no SSH
 connection. It reports only public versions, SHA-256 digests of packaged
 profiles, the Linux platform decision,
@@ -122,7 +149,8 @@ immutable copies again. It rechecks the confirmed inventory immediately before
 purging only that set. Actual DEB members must provide the native libva encoder
 and decoder, libyuv converter, GTK OpenGL client, common and server assets, X11
 bindings, and required Ubuntu Wayland modules in their declared owners. APT
-installs the exact local set plus `libva-drm2`, `python3-opengl`, and `python3-venv`, after which
+installs the exact local set plus `libva-drm2`, `python3-opengl`, `python3-venv`,
+`dbus-daemon`, and `python3-dbus`, after which
 every consumed module is imported. The helper never uses `dpkg -i`, runs
 `autoremove`, changes APT sources, or purges an unrelated package.
 

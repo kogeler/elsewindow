@@ -38,6 +38,7 @@ from elsewindow.journal import (
     xpra_environment,
 )
 from elsewindow.log_transport import LOG_PROTOCOL
+from elsewindow.session_bus import OwnedSessionBus, SessionBusError
 
 SCHEMA = 1
 MAX_BYTES = 128 * 1024
@@ -502,6 +503,7 @@ def serve(request: dict[str, Any]) -> None:
     stopping = False
     journal: Journal | None = None
     streams: list[XpraLogStream] = []
+    bus = OwnedSessionBus()
 
     def stop(_signal: int, _frame: Any) -> None:
         nonlocal stopping
@@ -538,7 +540,7 @@ def serve(request: dict[str, Any]) -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=xpra_environment(journal.level),
+                env=bus.start(xpra_environment(journal.level)),
             )
             record.update(xpra_pid=process.pid, xpra_start=process_start(process.pid))
             write_record(root, record)
@@ -574,6 +576,10 @@ def serve(request: dict[str, Any]) -> None:
                     exited_at = exited_at or time.monotonic()
                     if time.monotonic() - exited_at > 1:
                         break
+    except SessionBusError as error:
+        if journal is not None:
+            journal.emit(PRIORITIES["error"], str(error))
+        raise AgentError("notification_bus_unavailable", str(error)) from error
     finally:
         if process is not None:
             if process.poll() is None:
@@ -594,7 +600,9 @@ def serve(request: dict[str, Any]) -> None:
                     PRIORITIES["error" if process.returncode else "info"],
                     f"persistent Xpra process exited with status {process.returncode}",
                 )
-                journal.close()
+        bus.close()
+        if journal is not None:
+            journal.close()
         with locked(root, key):
             latest = read_record(root, key)
             if latest is not None and latest["token"] == token:

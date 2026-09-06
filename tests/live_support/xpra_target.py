@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from elsewindow.config import DEFAULT_CLIPBOARD_POLICY
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE
 from elsewindow.session import build_server_argv
@@ -20,43 +22,7 @@ PERSISTENT_DISCONNECTS = ("detach", "client-kill", "master-close", "abrupt", "ca
 PERSISTENT_CONNECTIONS = len(PERSISTENT_DISCONNECTS) + 2
 UNRELATED_PROCESS_MARKER = "/tmp/elsewindow-live-unrelated-process"
 
-REMOTE_APP_SOURCE = b"""#!/bin/sh
-set -eu
-
-marker=$1
-title=$2
-umask 077
-# Bound native graphics worker pools on high-core-count CI hosts without
-# relaxing container process limits or changing the production Xpra profile.
-GDK_BACKEND=wayland python3 -c '
-import os, sys
-os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])
-os.execv(sys.executable, [sys.executable, "-m", "xpra.gtk.examples.window_title", sys.argv[1]])
-' "$title" &
-child=$!
-
-cleanup() {
-    trap - EXIT HUP INT TERM
-    if kill -0 "$child" 2>/dev/null; then
-        kill "$child" 2>/dev/null || true
-        wait "$child" 2>/dev/null || true
-    fi
-    rm -f -- "$marker" "$marker.exit"
-}
-
-trap cleanup EXIT
-trap 'exit 0' HUP INT TERM
-start=$(awk '{print $22}' "/proc/$child/stat")
-printf '%s %s %s\n' "$child" "$start" "${WAYLAND_DISPLAY:?}" > "$marker"
-while kill -0 "$child" 2>/dev/null; do
-    if test -f "$marker.exit"; then
-        read -r status < "$marker.exit"
-        exit "$status"
-    fi
-    sleep 0.1
-done
-wait "$child"
-"""
+REMOTE_APP_SOURCE = Path(__file__).with_name("gui_app.py").read_bytes()
 
 
 def _target_user_argv(target: str, *arguments: str) -> list[str]:
@@ -209,11 +175,15 @@ def install_xpra_fixture(resources: LiveResources, target: str) -> None:
 
 
 def start_unrelated_resources(resources: LiveResources, target: str) -> None:
-    server = build_server_argv(
-        ("/bin/sleep", "3600"),
-        "elsewindow-unrelated",
-        DEFAULT_ENCODING_PROFILE,
-        DEFAULT_CLIPBOARD_POLICY,
+    server = (
+        "dbus-run-session",
+        "--",
+        *build_server_argv(
+            ("/bin/sleep", "3600"),
+            "elsewindow-unrelated",
+            DEFAULT_ENCODING_PROFILE,
+            DEFAULT_CLIPBOARD_POLICY,
+        ),
     )
     checked(
         [

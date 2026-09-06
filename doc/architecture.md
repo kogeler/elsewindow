@@ -66,6 +66,14 @@ from PyPI. Separate packaged inputs and locks under `elsewindow/` own the
 local Xpra PyOpenGL additions and their temporary build tools; they are not
 Elsewindow import dependencies.
 
+`elsewindow.machine` is a standard-library-only namespace selector. Make and the
+repository launcher execute it with isolated system Python before selecting
+any prepared interpreter. An application-specific keyed hash of the OS machine
+ID and local UID separates every repository environment beneath `.venvs/`,
+including tooling and the Xpra additions. Installed and standalone commands
+reuse that key in their default XDG Xpra environment location. Explicit Xpra
+directory overrides remain exact operator-owned locations.
+
 The repository launcher validates its hash-lock marker before execution. It
 replaces inherited `PYTHONPATH` with the repository root: `elsewindow` comes
 from that reviewed source tree and `ssh_wrapper` comes from the prepared
@@ -92,8 +100,11 @@ Production session startup, attach, and the live harness's auxiliary Xpra
 commands share the package's strict YAML assembler. Auxiliary command builders
 add only runtime-selected targets and the owned mux wrapper; their canonical
 flags remain package data rather than a second Python table. The session layer
-applies the selected clipboard policy explicitly to both Xpra peers after the
-mirrored `--minimal` base options.
+applies the selected clipboard policy and reviewed GUI defaults explicitly to
+both Xpra peers after the mirrored `--minimal` base options. `session_bus.py`
+owns a private foreground notification bus for each ordinary or persistent
+remote session. The journal relay and persistent worker reuse it without
+wrapping or changing the recorded Xpra PID or command fingerprint.
 
 The package treats Xpra as a release-backed external application. It validates
 only public command surfaces and observes real process, window, picture, and

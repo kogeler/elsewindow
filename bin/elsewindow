@@ -3,7 +3,8 @@
 set -euo pipefail
 
 repository_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-venv_dir="${repository_dir}/venv-runtime"
+venv_root="$(/usr/bin/python3 -I "${repository_dir}/elsewindow/machine.py")"
+venv_dir="${repository_dir}/${venv_root}/venv-runtime"
 venv_python="${venv_dir}/bin/python"
 requirements_file="${repository_dir}/requirements.txt"
 requirements_state="${venv_dir}/.requirements.txt"
@@ -38,5 +39,5 @@ if ! PYTHONPATH="${repository_dir}" \
 fi
 
 PYTHONPATH="${repository_dir}" \
-ELSEWINDOW_XPRA_VENV="${repository_dir}/venv-xpra" \
+ELSEWINDOW_XPRA_VENV="${repository_dir}/${venv_root}/venv-xpra" \
 exec "${venv_python}" -m elsewindow "$@"

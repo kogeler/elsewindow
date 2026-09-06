@@ -17,6 +17,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash box \
         python3-opengl \
         x11-utils \
         xauth \
+        xdotool \
         xfonts-base \
         xvfb \
     && rm -rf /var/lib/apt/lists/*

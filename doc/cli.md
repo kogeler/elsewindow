@@ -93,9 +93,13 @@ those system prerequisites automatically. The temporary build packages are
 removed from the Xpra environment after installation.
 
 The repository's `make runtime-venv` prepares both environments, storing the
-Xpra additions in `venv-xpra`. Installed and standalone commands default to
-the `elsewindow/xpra-venv` directory beneath the user's XDG data directory.
-`ELSEWINDOW_XPRA_VENV` can select a dedicated absolute directory. Ordinary
+Xpra additions in `.venvs/<machine-user-key>/venv-xpra`. Installed and standalone
+commands default to the `elsewindow/<machine-user-key>/xpra-venv` directory beneath
+the user's XDG data directory. The key is an application-specific hash of `/etc/machine-id`
+and the local UID, so a shared data directory keeps each host's interpreter
+and native additions separate. A missing or invalid machine ID is an error.
+`ELSEWINDOW_XPRA_VENV` can select an exact dedicated absolute directory instead;
+an explicit override must not be shared between hosts. Ordinary
 startup only validates the prepared environment and fails with setup guidance
 if its current lock, system interpreter, or installed package bytes differ.
 
@@ -126,6 +130,15 @@ Only reviewed profiles are selectable. There are no public switches for an
 Xpra backend, display, session name, title, individual encoder, decoder,
 colorspace converter, pixel format, or renderer. Those choices come from the
 packaged profile configuration; the remote backend is always Wayland.
+
+Custom application cursors, vertical and horizontal mouse-wheel forwarding,
+keyboard-state synchronization, and modal-window handling are enabled by
+default in both session lifetime modes, as are remote application notifications.
+The local desktop's notification service presents them; its do-not-disturb,
+permissions, and visibility policies still apply. DPI is detected instead of forced to
+a fixed value. Client scaling is allowed but starts at 1:1; there is no automatic
+zoom or extra Elsewindow CLI switch for these ordinary GUI features. See the
+[minimal-base review](xpra.md#minimal-base-review) for the retained restrictions.
 
 ### Encoding Profile
 

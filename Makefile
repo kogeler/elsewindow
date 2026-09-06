@@ -5,13 +5,17 @@ SHELL := /bin/bash
 
 SYSTEM_PYTHON ?= python3
 PODMAN ?= podman
-RUNTIME_VENV := venv-runtime
-XPRA_VENV := venv-xpra
-QUALITY_VENV := venv-quality
-TEST_VENV := venv-test
-PACKAGE_VENV := venv-package
-STANDALONE_VENV := venv-standalone
-DOCS_VENV := venv-docs
+VENV_ROOT := $(shell /usr/bin/python3 -I elsewindow/machine.py)
+ifeq ($(VENV_ROOT),)
+$(error Cannot select machine-specific environments; check /etc/machine-id)
+endif
+RUNTIME_VENV := $(VENV_ROOT)/venv-runtime
+XPRA_VENV := $(VENV_ROOT)/venv-xpra
+QUALITY_VENV := $(VENV_ROOT)/venv-quality
+TEST_VENV := $(VENV_ROOT)/venv-test
+PACKAGE_VENV := $(VENV_ROOT)/venv-package
+STANDALONE_VENV := $(VENV_ROOT)/venv-standalone
+DOCS_VENV := $(VENV_ROOT)/venv-docs
 RUNTIME_PYTHON := $(RUNTIME_VENV)/bin/python
 QUALITY_PYTHON := $(QUALITY_VENV)/bin/python
 TEST_PYTHON := $(TEST_VENV)/bin/python

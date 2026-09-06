@@ -32,7 +32,9 @@ same behavior.
 
 Run `make runtime-venv` before using the launcher. The local and remote systems
 need OpenSSH, `false`, Python 3, and the compatible maintained-fork Xpra
-packages, plus an accessible systemd journal on each host. The remote Xpra
+packages, plus an accessible systemd journal on each host. Notification support
+requires the distribution's `dbus-daemon` and `python3-dbus`; the project installer
+installs both explicitly. The remote Xpra
 installation must provide the `seamless` Wayland server. The local side needs
 a working graphical session. The `h264` profile
 additionally requires a usable DRM render node and a hardware-specific VA-API
@@ -95,7 +97,60 @@ Production consumes the canonical base, lifecycle, selected transport, and
 selected network blocks exactly. It excludes fork-only diagnostics and helper
 commands, translates only the three container-private socket/session paths to
 the owned remote runtime, and appends this project's selected clipboard policy,
-remaining auxiliary-data restrictions, and dynamic session/application values.
+GUI defaults, remaining auxiliary-data restrictions, and dynamic session/application values.
+
+### Minimal Base Review
+
+The fork's live base retains `--minimal`. Elsewindow appends a small, explicit
+GUI policy in `session.py` after the unchanged mirrored blocks: custom cursor
+shapes and detected DPI on both peers; mouse-wheel forwarding on both axes,
+keyboard-state synchronization, modal-window handling, and initially unscaled
+client scaling on the client. These are defaults, not new public switches.
+Pointer motion, buttons, focus, resizing and application key combinations
+remain ordinary Xpra behavior; raw keycodes and Xpra's own hotkeys stay disabled.
+Remote application notifications are also enabled, using the private owned
+session bus described in the [security model](security.md).
+
+The complete reviewed set of defaults changed by the fork's current
+[`--minimal` parser](https://github.com/kogeler/xpra/blob/develop/xpra/scripts/parsing.py)
+is grouped below. The mirrors remain byte-identical; review this boundary again
+when changing the consumed Xpra version.
+
+| Affected options | Elsewindow decision |
+|---|---|
+| `cursors`, `mousewheel`, `keyboard-sync`, `modal-windows` | Restore ordinary GUI behavior; wheel forwarding includes both axes. |
+| `dpi`, `desktop-scaling` | Detect DPI; permit client scaling starting at 1:1, without automatic zoom. Application/toolkit HiDPI behavior remains its own responsibility. |
+| `notifications` | Enable on both peers; the local desktop controls presentation. |
+| `dbus`, `dbus-control` | Use the owned private bus remotely and the existing desktop notification bus locally; disable D-Bus control and Xpra bus autolaunch on both peers. |
+| `clipboard` | Apply the selected symmetric clipboard policy, bidirectional by default. |
+| `video`, `encodings`, `encoding`, `opengl` | Use the selected canonical transport profile, not independent GUI overrides. |
+| `bandwidth-limit`, `bandwidth-detection` | Use the selected canonical network profile and fixed client base. |
+| `pings`, `compression-level` | Retain the minimal transport baseline; the owned SSH master and heartbeat supervise lifetime. |
+| `file-transfer`, `open-files`, `open-url`, `forward-xdg-open`, `printing` | Keep disabled; notification support grants no file or URL opening capability. |
+| `audio`, `webcam`, `gstreamer`, `bell` | Keep disabled; no device/audio forwarding or system bell. |
+| `xsettings`, `gsettings-sync` | Keep desktop-settings synchronization disabled; do not copy the local desktop's configuration into the remote account. |
+| `start-new-commands`, `mdns`, `ssl-upgrade`, `websocket-upgrade`, `ssh-upgrade`, `rfb-upgrade`, `rdp-upgrade` | Keep disabled; no extra command startup, discovery, or transport upgrades. |
+| `mmap`, `sharing`, `lock`, `remote-logging` | Keep the minimal policy; use SSH transport and the product's own labeled journal stream, without enabling Xpra sharing or extra session locking. |
+| `system-tray` | Load the client tray helper required by the current notification presenter; explicitly disable application tray forwarding on the server. |
+| `tray`, `splash`, `headerbar`, `border` | Keep Xpra's extra UI disabled. Native window decorations are unaffected. |
+| `key-shortcut`, `keyboard-raw` | Keep Xpra hotkeys and raw keycodes disabled, preserving application shortcuts and translated keyboard input. |
+| `windows`, `min-size`, `max-size`, `desktop-fullscreen` | Keep seamless windows enabled and the permissive size baseline; do not force a full-desktop mode. This does not disable an application's own fullscreen action. |
+| `pixel-depth`, `sync-xvfb` | Keep the reviewed true-color baseline; Xvfb synchronization does not apply to the remote Wayland backend. |
+| client `bind` | Keep the minimal attach listener policy; no extra Xpra listener. |
+
+The current fork has a separate startup limitation: its minimal-mode reparse
+can duplicate an append-valued `start-child-after-connect` command. Ordinary
+sessions may therefore invoke an application twice; an application's own
+single-instance behavior can conceal this. The public live GUI fixture is
+single-instance, but this is not a product workaround or a guarantee that an
+arbitrary application starts only once. That parser behavior belongs to the
+maintained fork; the GUI defaults do not change the startup lifecycle.
+
+Likewise, allowing modal hints on the client does not create missing Wayland
+metadata. The current release's GTK Wayland dialog can be displayed without
+the X11 modal/transient properties on the local window. The live fixture checks
+opening and keyboard dismissal; full dialog parenting/stacking correctness
+remains a maintained-fork concern.
 
 The application itself runs on the remote Wayland display. Its Vulkan or
 OpenGL renderer opens the remote GPU and renders there; Xpra captures the
@@ -178,9 +233,10 @@ One invocation:
 The server cannot adopt an existing display. It binds no Xpra TCP listener.
 OpenSSH forwarding, agent sharing, X11 forwarding, automatic reconnection,
 fallback authentication, Xpra audio, webcam, printing, file transfer, URL and
-file opening, notifications, HTML, SSH upgrades, D-Bus, and additional command
+file opening, HTML, SSH upgrades, D-Bus control, and additional command
 startup are disabled. Clipboard synchronization follows the validated public
-policy and defaults to `both`.
+policy and defaults to `both`; notifications use a private session bus and the
+same owned SSH/Xpra connection.
 
 In ordinary mode, normal detach, application exit, cancellation, `SIGHUP`,
 `SIGINT`, `SIGTERM`, lease expiry, or SSH-master loss enters the same idempotent

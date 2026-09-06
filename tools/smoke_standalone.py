@@ -115,6 +115,7 @@ def smoke(artifact: Path, *, root: Path, wheels: Path) -> None:
             "profiles.yml",
             "_persistent_agent.py",
             "journal.py",
+            "session_bus.py",
             "log_transport.py",
             "requirements-xpra.txt",
             "requirements-xpra-build.txt",

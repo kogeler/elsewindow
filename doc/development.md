@@ -13,6 +13,15 @@ make format
 make check
 ```
 
+All Make environments live beneath `.venvs/<machine-user-key>/`; the standard-
+library-only `elsewindow/machine.py` selects the same namespace for Make and the
+repository launcher before any venv exists. It uses an application-specific
+hash of `/etc/machine-id` and the local UID, independently of the checkout path,
+hostname, or boot. Shared checkouts cannot reuse another machine's Python or
+native extensions. A missing or invalid OS identity fails explicitly instead
+of selecting a common directory. Cloned systems must have distinct OS machine
+IDs. Old root-level venvs are neither reused nor migrated or deleted.
+
 The five maintainer environments are separated by responsibility, while
 `venv-runtime` contains only production requirements:
 
@@ -29,6 +38,14 @@ target `make runtime-python-venv` is used by the container harness, which does
 not need Xpra installed on its orchestration host. Every session validates the
 current Xpra lock, interpreter identity, versions, installed file hashes and
 launcher. Explicit setup alone may repair an owned stale environment.
+
+`make clean` removes environments only from the current machine/user namespace;
+it still removes shared build artifacts and caches as before. The complete
+`.venvs/` tree is excluded from Git, source distributions, and container payloads.
+The shared wheel/sdist/standalone smoke prepares the default machine-scoped XDG
+location before testing an exact explicit override and stale-environment repair.
+The CPython 3.13 compatibility image includes Make and the distribution's
+`/usr/bin/python3` to exercise the real pre-venv launcher bootstrap as well.
 
 `make runtime-venv` and `make dev-venv` revalidate the installed wrapper and
 its distribution version, not just the lock marker. If a Python transition makes an existing
@@ -75,7 +92,8 @@ and installs through APT.
 Capability validation requires the native libva encoder and decoder, libyuv,
 GTK OpenGL, common/server assets, X11 bindings, and Ubuntu Wayland modules in
 their owning packages. APT explicitly requests `libva-drm2`,
-`python3-opengl`, and `python3-venv`; post-install verification imports every
+`python3-opengl`, `python3-venv`, `dbus-daemon`, and `python3-dbus`;
+post-install verification imports every
 required module. Any
 missing, duplicate, symlinked, or unsafe payload fails before mutation.
 
@@ -113,6 +131,15 @@ client kill, deliberate master closure, master kill and cancellation. They
 wait beyond the ordinary heartbeat lease with all connections closed, compare
 the same application/server PID and service token after each reconnect, and
 check cleanup after application exit with both zero and nonzero status.
+The same public GTK fixture exercises text/modifier input, both wheel axes,
+custom cursor pixels through XFixes, modal-dialog opening/keyboard dismissal, and
+notification delivery to a real freedesktop service on the disposable client's
+private bus. No Xpra implementation objects or test-only input options are
+used. The private remote notification bus retains its process identity across
+persistent reconnects and is gone after the owned application/session ends.
+The client permits modal hints, but the fixture does not equate GTK's Wayland
+modal grab with X11 window-manager properties; compositor metadata correctness
+remains in the maintained fork.
 Both guests run real journald. The confined client adds only a bounded private
 runtime tmpfs; its journal daemon has no capabilities, and the product remains
 non-root. A container-only bounded journal policy retains the complete matrix
@@ -134,8 +161,8 @@ closing one leaves the other application alive. The isolated subprocess
 tests cover simultaneous subscribers for the same and different sessions,
 including one observer leaving without affecting the others; identity tests
 separate remote machines and accounts and cover deferred startup failures.
-The graphical fixture inherits at most two available CPUs before launching its
-public test application, bounding native worker pools on high-core-count hosts
+The graphical fixture uses at most two available CPUs before loading GTK,
+bounding native worker pools on high-core-count hosts
 without relaxing container process limits or changing production Xpra profiles.
 Unrelated resources must survive and every invocation still authenticates once.
 The disposable account has narrowly scoped sudo permission only for its own

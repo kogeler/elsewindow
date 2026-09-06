@@ -10,6 +10,8 @@ All notable changes to Elsewindow are documented here.
 
 ### Added
 
+- Enabled remote application notifications by default, with a private owned
+  foreground D-Bus session per application session and no Xpra D-Bus control.
 - Added a separate system-Python Xpra environment with hash-locked matching
   PyOpenGL and accelerator additions. `make runtime-venv` prepares both local
   environments; installed and standalone commands provide `--prepare-xpra`.
@@ -55,6 +57,10 @@ All notable changes to Elsewindow are documented here.
 
 ### Changed
 
+- Isolated all checkout Python environments by an application-specific hash of
+  the OS machine ID and local UID, shared by Make and the repository launcher.
+  Installed and standalone Xpra defaults use the same host isolation for shared
+  data directories. Leave legacy environments and other machines' venvs untouched.
 - Persistent resumption requires the original logging policy.
 - Consolidated all public CLI options, defaults, profiles, and restrictions
   into one linked reference, with parser-backed documentation checks.
@@ -67,6 +73,9 @@ All notable changes to Elsewindow are documented here.
 
 ### Fixed
 
+- Restored ordinary GUI behavior suppressed by the minimal Xpra base: custom
+  cursors, mouse-wheel forwarding, keyboard-state synchronization, modal windows,
+  detected DPI, and client scaling initially at 1:1, without new CLI switches.
 - Routed `SIGHUP` through normal session cancellation and terminated owned
   local SSH probe processes when their requests are cancelled.
 

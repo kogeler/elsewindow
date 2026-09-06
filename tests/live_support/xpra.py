@@ -173,6 +173,8 @@ def client_driver_command(client: str, case: str) -> tuple[list[str], dict[str, 
             "--env",
             "ELSEWINDOW_LIVE_INSTALLED_ROOT=/home/box/.local",
             client,
+            "/usr/bin/dbus-run-session",
+            "--",
             "/usr/local/bin/python",
             "/work/src/tests/live_xpra_e2e.py",
             "--case",
@@ -208,6 +210,11 @@ def run_driver(resources: LiveResources, client: str, case: str) -> dict[str, ob
     )
     if completed.returncode != 0:
         for stream in (completed.stdout, completed.stderr):
+            notifications = "\n".join(
+                line for line in stream.splitlines() if "notif" in line.lower()
+            )[-8192:]
+            if notifications:
+                print(notifications, file=sys.stderr)
             detail = stream[-4096:].strip()
             if detail:
                 print(detail, file=sys.stderr)
@@ -277,6 +284,29 @@ def verify_case_cleanup(
                 resources, target, display, marker
             ),
         )
+    buses = evidence.get("buses")
+    if not isinstance(buses, list) or not buses:
+        raise LiveFailure("the private bus lifecycle evidence is missing")
+    for bus in buses:
+        if (
+            not isinstance(bus, dict)
+            or not isinstance(bus.get("pid"), int)
+            or not str(bus.get("start", "")).isdigit()
+        ):
+            raise LiveFailure("the private bus process identity is invalid")
+
+        def ended(bus: dict = bus) -> bool:
+            output = run_process(
+                [resources.podman, "exec", target, "cat", f"/proc/{bus['pid']}/stat"],
+                capture_output=True,
+                check=False,
+            )
+            if output.returncode:
+                return True
+            fields = output.stdout.rsplit(b")", 1)[1].split()
+            return fields[19].decode() != bus["start"] or fields[0] == b"Z"
+
+        wait_until("owned notification bus cleanup", ended)
 
 
 def run_xpra_matrix(

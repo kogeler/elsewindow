@@ -22,6 +22,7 @@ from importlib.resources import files
 from typing import Any
 
 from .log_transport import MAX_MESSAGE, MAX_QUEUE, SESSION, Publisher
+from .session_bus import OwnedSessionBus, SessionBusError
 
 DEFAULT_LOG_LEVEL = "warning"
 LOG_LEVELS = ("critical", "error", "warning", "info", "debug", "debug-clipboard")
@@ -36,7 +37,7 @@ REMOTE_LOADER = (
     "import base64,json,sys,types,zlib;"
     "d=json.loads(zlib.decompress(base64.b64decode(sys.argv[1])));"
     "p=types.ModuleType('elsewindow');p.__path__=[];sys.modules[p.__name__]=p;"
-    "\nfor n in ('log_transport','journal'):\n"
+    "\nfor n in ('session_bus','log_transport','journal'):\n"
     " m=types.ModuleType('elsewindow.'+n);sys.modules[m.__name__]=m;"
     "exec(compile(d[n],'<elsewindow-'+n+'>','exec'),m.__dict__)\n"
     "exec(compile(d['main'],'<elsewindow-agent>','exec'))"
@@ -284,6 +285,7 @@ class XpraLogStream:
 def remote_source(main: str) -> str:
     """Package owned source as data, with no remote Elsewindow installation."""
     payload = {
+        "session_bus": files("elsewindow").joinpath("session_bus.py").read_text(),
         "journal": files("elsewindow").joinpath("journal.py").read_text(),
         "log_transport": files("elsewindow").joinpath("log_transport.py").read_text(),
         "main": main,
@@ -291,13 +293,16 @@ def remote_source(main: str) -> str:
     return base64.b64encode(zlib.compress(json.dumps(payload).encode())).decode()
 
 
-def remote_argv(argv: tuple[str, ...], level: str, session: str) -> tuple[str, ...]:
+def remote_argv(
+    argv: tuple[str, ...], level: str, session: str, *, with_session_bus: bool = False
+) -> tuple[str, ...]:
     return (
         "python3",
         "-c",
         REMOTE_LOADER,
         remote_source(
-            "from elsewindow.journal import remote_main\nraise SystemExit(remote_main(sys.argv[2:]))"
+            "from elsewindow.journal import remote_main\n"
+            f"raise SystemExit(remote_main(sys.argv[2:], with_session_bus={with_session_bus!r}))"
         ),
         level,
         session,
@@ -305,7 +310,7 @@ def remote_argv(argv: tuple[str, ...], level: str, session: str) -> tuple[str, .
     )
 
 
-def remote_main(arguments: list[str]) -> int:
+def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
     """Relay ordinary remote output inside the already owned process group."""
     level, session, encoded = arguments
     journal = Journal(level, "server", session)
@@ -313,6 +318,7 @@ def remote_main(arguments: list[str]) -> int:
     stopping_at: float | None = None
     forwarding = {1: True, 2: True}
     streams: list[XpraLogStream] = []
+    bus = OwnedSessionBus()
 
     def stop(_signal: int, _frame: Any) -> None:
         nonlocal stopping_at
@@ -325,12 +331,15 @@ def remote_main(arguments: list[str]) -> int:
     try:
         journal.open()
         argv = json.loads(base64.b64decode(encoded))
+        environment = xpra_environment(level)
+        if with_session_bus:
+            environment = bus.start(environment)
         child = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=xpra_environment(level),
+            env=environment,
         )
         journal.emit(PRIORITIES["info"], "remote Xpra process started")
         assert child.stdout is not None and child.stderr is not None
@@ -372,10 +381,10 @@ def remote_main(arguments: list[str]) -> int:
             f"remote Xpra process exited with status {status}",
         )
         return status if status >= 0 else 128 - status
-    except (OSError, JournalError, subprocess.TimeoutExpired) as error:
+    except (OSError, JournalError, SessionBusError, subprocess.TimeoutExpired) as error:
         message = (
             str(error)
-            if isinstance(error, JournalError)
+            if isinstance(error, (JournalError, SessionBusError))
             else "remote Xpra journal relay failed"
         )
         journal.emit(PRIORITIES["error"], message)
@@ -393,6 +402,7 @@ def remote_main(arguments: list[str]) -> int:
             for pipe in (child.stdout, child.stderr):
                 if pipe is not None:
                     pipe.close()
+        bus.close()
         for log_stream in streams:
             log_stream.finish()
         journal.close()

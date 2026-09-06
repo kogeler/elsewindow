@@ -207,11 +207,15 @@ def test_client_terminal_uses_the_identical_filter_and_severity_stream(
     sink.close()
 
 
+@pytest.mark.parametrize("with_bus", (False, True))
 def test_remote_payload_preserves_display_exit_and_separate_journal_records(
-    receiver: socket.socket,
+    receiver: socket.socket, tmp_path: Path, with_bus: bool
 ) -> None:
+    bus_identity = tmp_path / "bus-pid"
     program = (
-        "import logging,os,sys;"
+        "import logging,os,sys;from pathlib import Path;"
+        f"bus=int(os.environ.get('DBUS_SESSION_BUS_PID','0'));assert bool(bus)=={with_bus!r};"
+        f"Path({str(bus_identity)!r}).write_text(str(bus));"
         "logging.basicConfig(format=os.environ['XPRA_LOG_FORMAT'],level=logging.DEBUG);"
         "logging.info('filtered');logging.error('remote marker');"
         "print('wayland-8',flush=True);sys.exit(23)"
@@ -219,7 +223,7 @@ def test_remote_payload_preserves_display_exit_and_separate_journal_records(
     main = (
         "from elsewindow import journal as j\n"
         f"j.JOURNAL_SOCKET={receiver.getsockname()!r}\n"
-        "raise SystemExit(j.remote_main(sys.argv[2:]))"
+        f"raise SystemExit(j.remote_main(sys.argv[2:], with_session_bus={with_bus!r}))"
     )
     result = subprocess.run(
         [
@@ -235,11 +239,18 @@ def test_remote_payload_preserves_display_exit_and_separate_journal_records(
             ).decode(),
         ],
         capture_output=True,
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("DBUS_")
+        },
         timeout=10,
         check=False,
     )
     assert result.returncode == 23
     assert result.stdout == b"wayland-8\n"
+    if with_bus:
+        assert not Path(f"/proc/{bus_identity.read_text()}").exists()
     fields, text = message(receiver)
     assert b"ELSEWINDOW_SIDE=server\n" in fields
     assert b"SYSLOG_IDENTIFIER=elsewindow-xpra-remote\n" in fields

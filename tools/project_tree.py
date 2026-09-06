@@ -17,6 +17,7 @@ ROOT_GENERATED_DIRECTORIES = frozenset(
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
+        ".venvs",
         "build",
         "dist",
         "htmlcov",

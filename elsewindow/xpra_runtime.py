@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .machine import MachineIdentityError, environment_key
+
 LOCK_PATH = Path(__file__).with_name("requirements-xpra.txt")
 BUILD_LOCK_PATH = Path(__file__).with_name("requirements-xpra-build.txt")
 SYSTEM_PYTHON = Path("/usr/bin/python3")
@@ -107,7 +109,7 @@ def system_environment() -> dict[str, str]:
 
 
 def runtime_directory() -> Path:
-    """Use one explicit location or the user's persistent XDG data directory."""
+    """Use an explicit location or a machine-scoped persistent XDG directory."""
     configured = os.environ.get(DIRECTORY_VARIABLE)
     if configured is not None:
         path = Path(configured)
@@ -115,7 +117,11 @@ def runtime_directory() -> Path:
         data = Path(os.environ.get("XDG_DATA_HOME", ""))
         if not data.is_absolute():
             data = Path.home() / ".local/share"
-        path = data / "elsewindow/xpra-venv"
+        try:
+            key = environment_key()
+        except MachineIdentityError as error:
+            raise XpraRuntimeError(str(error)) from error
+        path = data / "elsewindow" / key / "xpra-venv"
     return _dedicated_directory(path)
 
 

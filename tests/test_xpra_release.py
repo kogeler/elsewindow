@@ -1063,6 +1063,8 @@ def test_simulation_requires_every_local_xpra_package(tmp_path: Path) -> None:
         "libva-drm2",
         "python3-opengl",
         "python3-venv",
+        "dbus-daemon",
+        "python3-dbus",
     )
 
     missing = output.replace(f"Inst xpra ({VERSION} local-deb [amd64])\n", "")

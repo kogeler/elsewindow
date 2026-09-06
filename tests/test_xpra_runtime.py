@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from elsewindow import cli
+from elsewindow import cli, machine
 from elsewindow import xpra_runtime as runtime
 
 
@@ -227,16 +227,65 @@ def test_xdg_defaults_and_unsafe_explicit_locations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(runtime.DIRECTORY_VARIABLE, raising=False)
+    monkeypatch.setattr(runtime, "environment_key", lambda: "machine-user-key")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    assert runtime.runtime_directory() == tmp_path / "elsewindow/xpra-venv"
+    assert (
+        runtime.runtime_directory()
+        == tmp_path / "elsewindow/machine-user-key/xpra-venv"
+    )
     monkeypatch.setenv("XDG_DATA_HOME", "relative")
     assert (
-        runtime.runtime_directory() == Path.home() / ".local/share/elsewindow/xpra-venv"
+        runtime.runtime_directory()
+        == Path.home() / ".local/share/elsewindow/machine-user-key/xpra-venv"
     )
     for value in ("", "relative", "/", str(Path.home()), str(Path.cwd())):
         monkeypatch.setenv(runtime.DIRECTORY_VARIABLE, value)
         with pytest.raises(runtime.XpraRuntimeError, match="dedicated absolute"):
             runtime.runtime_directory()
+
+
+def test_xdg_default_requires_machine_identity_but_explicit_path_is_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable() -> str:
+        raise runtime.MachineIdentityError("machine identity unavailable")
+
+    monkeypatch.setattr(runtime, "environment_key", unavailable)
+    monkeypatch.delenv(runtime.DIRECTORY_VARIABLE, raising=False)
+    with pytest.raises(runtime.XpraRuntimeError, match="machine identity unavailable"):
+        runtime.runtime_directory()
+    monkeypatch.setenv(runtime.DIRECTORY_VARIABLE, str(tmp_path / "explicit"))
+    assert runtime.runtime_directory() == tmp_path / "explicit"
+
+
+def test_shared_xdg_setup_never_reuses_or_repairs_another_machine_environment(
+    setup: tuple[Path, Path, list[list[str]]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    xpra, _directory, calls = setup
+    monkeypatch.delenv(runtime.DIRECTORY_VARIABLE)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "shared-data"))
+    identity = tmp_path / "machine-id"
+    monkeypatch.setattr(machine, "MACHINE_ID_FILE", identity)
+    identity.write_text("0123456789abcdef" * 2, encoding="ascii")
+    first = runtime.prepare(xpra)
+    first_state = first.parent.parent / runtime.STATE_NAME
+    first_bytes = first_state.read_bytes()
+    identity.write_text("fedcba9876543210" * 2, encoding="ascii")
+    calls.clear()
+    with pytest.raises(runtime.XpraRuntimeError, match="missing or stale"):
+        runtime.prepared_launcher(xpra)
+    assert not calls
+    second = runtime.prepare(xpra)
+    assert first != second
+    assert runtime.prepared_launcher(xpra) == second
+    identity.write_text("0123456789abcdef" * 2, encoding="ascii")
+    calls.clear()
+    assert runtime.prepare(xpra) == first
+    assert all("pip" not in call and "venv" not in call for call in calls)
+    assert first_state.read_bytes() == first_bytes
+    assert second.is_file()
 
 
 def test_frozen_subprocess_environment_restores_host_libraries(

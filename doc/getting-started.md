@@ -55,10 +55,21 @@ make runtime-venv
 ```
 
 The one make target prepares `venv-runtime` and a separate `venv-xpra` using the
-system Xpra interpreter. Ordinary launcher startup never creates an environment
+system Xpra interpreter, both beneath `.venvs/<machine-user-key>/`. Make and the
+repository launcher select this directory automatically from an
+application-specific hash of `/etc/machine-id` and the local UID. Each machine
+therefore prepares its own environments in a shared checkout. Run the same
+`make runtime-venv` command once on each machine; do not activate a venv manually.
+Old root-level environments are ignored and left untouched.
+
+Ordinary launcher startup never creates an environment
 or invokes pip. It refuses to start when either environment is missing or stale.
 See the [explicit setup command](cli.md#prepare-xpra) for the installed-package
 equivalent and the current-input validation contract.
+
+This setup does not change the system `xpra` command or the shell's `PATH`.
+Elsewindow uses its prepared Xpra launcher, whereas a plain `xpra opengl` still
+checks the distribution's system Python and its installed modules.
 
 After the first release, GitHub Releases also provide
 `elsewindow-linux-amd64` and `elsewindow-linux-arm64`. Download the file that

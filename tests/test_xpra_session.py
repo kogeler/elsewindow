@@ -92,6 +92,7 @@ def test_exact_server_metadata_probe_and_mirrored_default_profiles(
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", config.encoding_profile),
         *session_module.clipboard_options(config.clipboard),
+        *session_module.SERVER_GUI_OPTIONS,
         *session_module.SERVER_SECURITY_OPTIONS,
     )
     assert not any(option.startswith("--start-child=") for option in server)
@@ -111,6 +112,7 @@ def test_exact_server_metadata_probe_and_mirrored_default_profiles(
         *network_profile(config.network_profile).client_options(),
         *production_transport_options("client", config.encoding_profile),
         *session_module.clipboard_options(config.clipboard),
+        *session_module.CLIENT_GUI_OPTIONS,
         *session_module.CLIENT_SECURITY_OPTIONS,
     ]
     combined = " ".join((*server, probe, *attach))
@@ -218,6 +220,7 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
         *session_module.clipboard_options(config.clipboard),
+        *session_module.SERVER_GUI_OPTIONS,
         *session_module.SERVER_SECURITY_OPTIONS,
     )
     assert attach == [
@@ -229,8 +232,61 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
         *network_profile(selected_network).client_options(),
         *production_transport_options("client", encoding_profile),
         *session_module.clipboard_options(config.clipboard),
+        *session_module.CLIENT_GUI_OPTIONS,
         *session_module.CLIENT_SECURITY_OPTIONS,
     ]
+
+
+@pytest.mark.parametrize("profile", encoding_profile_names())
+@pytest.mark.parametrize("persistent", (False, True))
+def test_gui_defaults_are_restored_for_every_profile_and_lifetime(
+    tmp_path: Path, profile: str, persistent: bool
+) -> None:
+    session = XpraSession(
+        replace(_config(tmp_path), encoding_profile=profile, persistent=persistent)
+    )
+    session._wrapper = Path("/private/xpra-ssh")
+    session._remote_display = "wayland-7"
+    for argv, gui, required in (
+        (
+            session.server_argv(),
+            session_module.SERVER_GUI_OPTIONS,
+            session._remote_required_options(),
+        ),
+        (
+            session.attach_argv(),
+            session_module.CLIENT_GUI_OPTIONS,
+            session._local_required_options(),
+        ),
+    ):
+        assert "--cursors=yes" in argv
+        assert "--dpi=0" in argv
+        assert "--notifications=yes" in argv
+        assert {
+            "--dbus=keep",
+            "--dbus-launch=no",
+            "--dbus-control=no",
+        }.issubset(argv)
+        assert all(option in argv for option in gui)
+        assert all(option.partition("=")[0] in required for option in gui)
+        for disabled in (
+            "audio",
+            "webcam",
+            "printing",
+            "file-transfer",
+            "open-files",
+            "open-url",
+        ):
+            assert f"--{disabled}=no" in argv
+    assert {
+        "--mousewheel=on",
+        "--keyboard-sync=yes",
+        "--modal-windows=yes",
+        "--desktop-scaling=on",
+        "--system-tray=yes",
+    }.issubset(session.attach_argv())
+    assert "--system-tray=no" in session.server_argv()
+    assert "--tray=no" in session.attach_argv()
 
 
 @pytest.mark.parametrize("policy", load_live_cli()["server"]["clipboard"])

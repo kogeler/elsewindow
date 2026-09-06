@@ -10,6 +10,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from elsewindow.machine import environment_key
+
 
 def smoke_xpra_runtime(
     command: list[str], *, root: Path, wheels: Path, environment: dict[str, str]
@@ -29,11 +31,13 @@ def smoke_xpra_runtime(
         encoding="utf-8",
     )
     xpra.chmod(0o755)
-    directory = root / "prepared Xpra"
+    data = root / "shared XDG data"
+    directory = data / "elsewindow" / environment_key() / "xpra-venv"
     selected = environment.copy()
+    selected.pop("ELSEWINDOW_XPRA_VENV", None)
     selected.update(
         PATH=str(binaries) + os.pathsep + os.environ.get("PATH", ""),
-        ELSEWINDOW_XPRA_VENV=str(directory),
+        XDG_DATA_HOME=str(data),
         PIP_NO_INDEX="1",
         PIP_FIND_LINKS=str(wheels),
     )
@@ -76,6 +80,9 @@ def smoke_xpra_runtime(
         or observation["pyopengl"] != observation["accelerate"]
     ):
         raise RuntimeError("prepared launcher used the wrong Python, modules, or argv")
+    # The default must be machine-scoped in every artifact. An explicit path
+    # still selects that exact directory for the existing repair/source-build case.
+    selected["ELSEWINDOW_XPRA_VENV"] = str(directory)
     source = next(directory.glob("lib/python*/site-packages/OpenGL/__init__.py"))
     source.write_bytes(source.read_bytes() + b"\n# changed installed bytes\n")
     stale = run([*command, "--diagnose"], 1)

@@ -55,6 +55,7 @@ strict = true
 [tool.bandit]
 exclude_dirs = [
     "tests",
+    ".venvs",
     "venv-quality",
     "venv-docs",
     "venv-test",

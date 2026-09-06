@@ -151,7 +151,18 @@ def test_invalid_authority_lifecycle_or_application_is_rejected(
         XpraConfig.from_namespace(parsed)
 
 
-@pytest.mark.parametrize("option", ("--backend", "--display", "--title"))
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--backend",
+        "--display",
+        "--title",
+        "--cursors",
+        "--mousewheel",
+        "--dpi",
+        "--notifications",
+    ),
+)
 def test_display_backend_and_title_are_not_public_inputs(option: str) -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(

@@ -13,6 +13,7 @@ import os
 import shlex
 import signal
 import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE, load_network_profiles
 from elsewindow.session import XpraSession, build_xpra_command_argv
 from elsewindow.xpra_runtime import prepared_launcher
+from tests.live_support.gui import application_state, verify_gui_defaults
 from tests.live_support.journal import LIVE_LOG_LEVELS
 from tests.live_support.process import LIVE_EVIDENCE_PREFIX, TARGET_ALIAS
 from tests.live_support.xpra_target import (
@@ -362,8 +364,9 @@ async def persistent_identity(session: XpraSession, marker: str) -> dict[str, ob
         raise RuntimeError("the persistent application marker is missing")
     record = persistent.record
     app_pid = stdout.decode().split()[0]
+    bus = (await application_state(session, marker))["bus"]
     unit = f"elsewindow-{record['key']}.service"
-    for pid in (app_pid, str(record["xpra_pid"])):
+    for pid in (app_pid, str(record["xpra_pid"]), str(bus["pid"])):
         status, cgroup, _stderr = await session._run_mux(
             shlex.join(("cat", f"/proc/{pid}/cgroup"))
         )
@@ -373,6 +376,7 @@ async def persistent_identity(session: XpraSession, marker: str) -> dict[str, ob
             )
     return {
         "application": stdout.decode().strip(),
+        "bus": bus,
         **{
             name: record[name]
             for name in ("key", "token", "xpra_pid", "xpra_start", "display")
@@ -411,7 +415,7 @@ async def cancel_driver(task: asyncio.Task[int]) -> None:
 
 async def concurrent_session(
     config: XpraConfig, arguments: argparse.Namespace
-) -> tuple[str, str]:
+) -> tuple[str, str, dict]:
     """Reuse the same fixture and production lifecycle alongside the first copy."""
     marker = case_marker(arguments.case) + "-concurrent"
     session = XpraSession(
@@ -429,8 +433,9 @@ async def concurrent_session(
         display = session._remote_display
         if display is None:
             raise RuntimeError("concurrent session did not publish its display")
+        bus = (await application_state(session, marker))["bus"]
         await exit_application(session, task, marker, 0)
-        return session.session_id, display
+        return session.session_id, display, bus
     except Exception:
         print_session_diagnostics(session)
         raise
@@ -438,11 +443,14 @@ async def concurrent_session(
         await cancel_driver(task)
 
 
-async def run_case(arguments: argparse.Namespace) -> dict[str, object]:
+async def run_case(
+    arguments: argparse.Namespace, notifications: Path
+) -> dict[str, object]:
     config = session_config(arguments)
     marker = case_marker(arguments.case)
     sessions = []
     provisional_sessions = []
+    buses = []
     if arguments.case == "linger-declined":
         session = XpraSession(config)
         initial_id = session.session_id
@@ -492,11 +500,25 @@ async def run_case(arguments: argparse.Namespace) -> dict[str, object]:
                     "persistent reconnect changed the shared log identity"
                 )
             sessions.append(session.session_id)
+            bus = (await application_state(session, marker))["bus"]
+            if bus not in buses:
+                buses.append(bus)
+            if arguments.case == "detach" or (
+                arguments.case == "persistent"
+                and mode in {PERSISTENT_DISCONNECTS[0], "exit-zero", "exit-error"}
+            ):
+                await verify_gui_defaults(session, marker, notifications)
             if arguments.case == "detach":
-                other_id, other_display = await concurrent_session(config, arguments)
-                if other_id == session.session_id or other_display == display:
+                other_id, other_display, other_bus = await concurrent_session(
+                    config, arguments
+                )
+                if (
+                    other_id == session.session_id
+                    or other_display == display
+                    or other_bus == bus
+                ):
                     raise RuntimeError(
-                        "concurrent sessions share a log or display identity"
+                        "concurrent sessions share a log, display or bus identity"
                     )
                 if task.done() or not await remote_identity_ready(
                     session, marker, display
@@ -506,6 +528,7 @@ async def run_case(arguments: argparse.Namespace) -> dict[str, object]:
                     )
                 sessions.append(other_id)
                 displays.append(other_display)
+                buses.append(other_bus)
             if config.persistent:
                 current = await persistent_identity(session, marker)
                 if identity is not None:
@@ -554,14 +577,42 @@ async def run_case(arguments: argparse.Namespace) -> dict[str, object]:
         "sessions": sessions,
         "provisional_sessions": provisional_sessions,
         "log_level": config.log_level,
+        "buses": buses,
     }
+
+
+async def run_with_notifications(arguments: argparse.Namespace) -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="elsewindow-live-gui-") as temporary:
+        path = Path(temporary) / "notifications.json"
+        recorder = await asyncio.create_subprocess_exec(
+            "/usr/bin/python3",
+            str(Path(__file__).with_name("live_support") / "notification_recorder.py"),
+            str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            assert recorder.stdout is not None
+            if await asyncio.wait_for(recorder.stdout.readline(), 10) != b"ready\n":
+                raise RuntimeError(
+                    "the disposable desktop notification service did not start"
+                )
+            return await run_case(arguments, path)
+        finally:
+            if recorder.returncode is None:
+                recorder.terminate()
+                try:
+                    await asyncio.wait_for(recorder.wait(), 5)
+                except TimeoutError:
+                    recorder.kill()
+                    await recorder.wait()
 
 
 def main() -> int:
     try:
         verify_packaged_product()
         arguments = parse_arguments()
-        evidence = asyncio.run(run_case(arguments))
+        evidence = asyncio.run(run_with_notifications(arguments))
         print("\n" + LIVE_EVIDENCE_PREFIX + json.dumps(evidence, sort_keys=True))
     except (OSError, RuntimeError, SSHError, ValueError) as error:
         print(f"live Xpra case failed: {error}", file=sys.stderr)
