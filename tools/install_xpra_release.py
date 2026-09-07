@@ -121,7 +121,13 @@ REQUIRED_XPRA_PACKAGES: Final = (
     "xpra-wayland",
     "xpra-x11",
 )
-REQUIRED_APT_PACKAGES: Final = ("libva-drm2", "python3-opengl")
+REQUIRED_APT_PACKAGES: Final = (
+    "libva-drm2",
+    "python3-opengl",
+    "python3-venv",
+    "dbus-daemon",
+    "python3-dbus",
+)
 PYTHON_PACKAGE_ROOT: Final = "usr/lib/python3/dist-packages/xpra"
 CPYTHON_EXTENSION: Final = r"\.cpython-[0-9]+-x86_64-linux-gnu\.so"
 COMMON_PACKAGE_CONTENT: Final = {

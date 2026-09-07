@@ -236,6 +236,16 @@ def test_project_enumeration_uses_current_files_without_git_state(
     (tmp_path / "site/index.html").write_text("generated\n", encoding="utf-8")
     (tmp_path / "doc/site").mkdir(parents=True)
     (tmp_path / "doc/site/hooks.py").write_text("maintained\n", encoding="utf-8")
+    (tmp_path / ".venv-xpra-interrupted").mkdir()
+    (tmp_path / ".venv-xpra-interrupted/staged.py").write_text(
+        "generated\n", encoding="utf-8"
+    )
+    (tmp_path / ".venv-xpra.lock").touch()
+    for key in ("machine-a", "machine-b"):
+        environment = tmp_path / ".venvs" / key / "venv-runtime"
+        environment.mkdir(parents=True)
+        (environment / "dependency.py").write_text("generated\n", encoding="utf-8")
+        (environment / "python").symlink_to("/usr/bin/python3")
 
     expected = {"doc/site/hooks.py", "source/changed.py", "untracked.txt"}
     assert {

@@ -54,6 +54,10 @@ jobs:
             requirements-package.txt
             requirements-docs.in
             requirements-docs.txt
+            elsewindow/requirements-xpra.in
+            elsewindow/requirements-xpra.txt
+            elsewindow/requirements-xpra-build.in
+            elsewindow/requirements-xpra-build.txt
       - name: Verify host boundary
         run: make doctor
       - name: Run the complete local gate
@@ -109,6 +113,10 @@ jobs:
             requirements-quality.txt
             requirements-package.in
             requirements-package.txt
+      - name: Prepare system Python graphics prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-venv python3-opengl python3-dev build-essential
       - name: Build once and smoke both Python distributions
         run: make package reproducibility smoke-wheel smoke-sdist SYSTEM_PYTHON=python
       - name: Preserve exact Python release candidates
@@ -148,6 +156,14 @@ jobs:
             requirements.in
             requirements-standalone.in
             requirements-standalone.txt
+            elsewindow/requirements-xpra.in
+            elsewindow/requirements-xpra.txt
+            elsewindow/requirements-xpra-build.in
+            elsewindow/requirements-xpra-build.txt
+      - name: Prepare system Python graphics prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3-venv python3-opengl python3-dev build-essential
       - name: Build and smoke the native executable
         run: >-
           make standalone smoke-standalone SYSTEM_PYTHON=python

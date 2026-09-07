@@ -7,13 +7,14 @@ removes only the process group, sockets, and runtime state owned by that
 invocation.
 
 The application renders through the remote Wayland compositor and remote GPU;
-only Xpra picture, input, and control traffic crosses SSH.
+only Xpra picture, input, clipboard, and control traffic crosses SSH.
 
 ## Start here
 
 - [Install and run Elsewindow](getting-started.md) on Linux with CPython 3.13
   or 3.14.
-- Choose and review [Xpra behavior and network profiles](xpra.md).
+- Find every option, default, and profile in the [CLI reference](cli.md).
+- Review [Xpra behavior and lifecycle](xpra.md).
 - Understand the [security and cleanup boundary](security.md).
 - Read the [architecture](architecture.md) before changing lifecycle code.
 

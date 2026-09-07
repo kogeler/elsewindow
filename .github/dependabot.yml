@@ -7,7 +7,9 @@ updates:
   # generated locks. Keep the coordinated runtime dependency manual and group
   # every other Python version update into one resolver change.
   - package-ecosystem: pip
-    directory: /
+    directories:
+      - /
+      - /elsewindow
     schedule:
       interval: weekly
       day: monday

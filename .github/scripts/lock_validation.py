@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from dependency_snapshot import LOCK_NAMES, SnapshotError, build_manifests
+from dependency_snapshot import AUDIENCES, LOCK_NAMES, SnapshotError, build_manifests
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,13 +28,24 @@ def validate(root: Path) -> dict[str, int]:
         or wrapper.get("scope") != "runtime"
     ):
         raise SnapshotError("runtime lock must contain exact ssh-wrapper==0.1.0")
-    for name in LOCK_NAMES[1:]:
+    for name in (f"requirements-{audience}.txt" for audience in AUDIENCES):
         resolved = manifests[name]["resolved"]
         if not isinstance(resolved, dict) or not set(runtime).issubset(resolved):
             raise SnapshotError(f"runtime lock is not a subset of {name}")
         for package, dependency in runtime.items():
             if resolved[package]["package_url"] != dependency["package_url"]:
                 raise SnapshotError(f"{name} changes runtime pin: {package}")
+    graphics = manifests["elsewindow/requirements-xpra.txt"]["resolved"]
+    if not isinstance(graphics, dict) or set(graphics) != {
+        "pyopengl",
+        "pyopengl-accelerate",
+    }:
+        raise SnapshotError(
+            "Xpra additions must contain only the matched PyOpenGL pair"
+        )
+    versions = {item["package_url"].rsplit("@", 1)[-1] for item in graphics.values()}
+    if len(versions) != 1:
+        raise SnapshotError("PyOpenGL and its accelerator must have identical versions")
     return {
         name: len(manifest["resolved"])
         for name, manifest in manifests.items()

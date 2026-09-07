@@ -1059,7 +1059,13 @@ def test_simulation_requires_every_local_xpra_package(tmp_path: Path) -> None:
         *releases.REQUIRED_APT_PACKAGES,
         *(str(path) for path in paths),
     )
-    assert releases.REQUIRED_APT_PACKAGES == ("libva-drm2", "python3-opengl")
+    assert releases.REQUIRED_APT_PACKAGES == (
+        "libva-drm2",
+        "python3-opengl",
+        "python3-venv",
+        "dbus-daemon",
+        "python3-dbus",
+    )
 
     missing = output.replace(f"Inst xpra ({VERSION} local-deb [amd64])\n", "")
     with pytest.raises(releases.ReleaseError, match="exact local Xpra set"):

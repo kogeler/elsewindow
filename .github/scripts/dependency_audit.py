@@ -21,6 +21,8 @@ DEFAULT_LOCKS = (
     DEFAULT_ROOT / "requirements-package.txt",
     DEFAULT_ROOT / "requirements-standalone.txt",
     DEFAULT_ROOT / "requirements-docs.txt",
+    DEFAULT_ROOT / "elsewindow/requirements-xpra.txt",
+    DEFAULT_ROOT / "elsewindow/requirements-xpra-build.txt",
 )
 Finding = tuple[str, str, str]
 

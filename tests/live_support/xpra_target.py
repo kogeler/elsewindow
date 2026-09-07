@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from elsewindow.config import DEFAULT_CLIPBOARD_POLICY
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE
 from elsewindow.session import build_server_argv
 
@@ -14,32 +17,12 @@ OWNED_TITLE = "Elsewindow Live Test"
 REMOTE_APP = "/home/xpra-test/elsewindow-live-app"
 OWNED_MARKER = "/tmp/elsewindow-live-owned"
 ABRUPT_MARKER = "/tmp/elsewindow-live-abrupt"
+PERSISTENT_MARKER = "/tmp/elsewindow-live-persistent"
+PERSISTENT_DISCONNECTS = ("detach", "client-kill", "master-close", "abrupt", "cancel")
+PERSISTENT_CONNECTIONS = len(PERSISTENT_DISCONNECTS) + 2
 UNRELATED_PROCESS_MARKER = "/tmp/elsewindow-live-unrelated-process"
 
-REMOTE_APP_SOURCE = b"""#!/bin/sh
-set -eu
-
-marker=$1
-title=$2
-umask 077
-GDK_BACKEND=wayland python3 -m xpra.gtk.examples.window_title "$title" &
-child=$!
-
-cleanup() {
-    trap - EXIT HUP INT TERM
-    if kill -0 "$child" 2>/dev/null; then
-        kill "$child" 2>/dev/null || true
-        wait "$child" 2>/dev/null || true
-    fi
-    rm -f -- "$marker"
-}
-
-trap cleanup EXIT
-trap 'exit 0' HUP INT TERM
-start=$(awk '{print $22}' "/proc/$child/stat")
-printf '%s %s %s\n' "$child" "$start" "${WAYLAND_DISPLAY:?}" > "$marker"
-wait "$child"
-"""
+REMOTE_APP_SOURCE = Path(__file__).with_name("gui_app.py").read_bytes()
 
 
 def _target_user_argv(target: str, *arguments: str) -> list[str]:
@@ -180,13 +163,27 @@ def install_xpra_fixture(resources: LiveResources, target: str) -> None:
         purpose="installing the Xpra live application",
         input_data=REMOTE_APP_SOURCE,
     )
+    podman_exec(
+        resources,
+        target,
+        "sh",
+        "-ceu",
+        "umask 077; cat > /etc/sudoers.d/elsewindow-live-linger; chmod 0440 /etc/sudoers.d/elsewindow-live-linger; visudo -cf /etc/sudoers.d/elsewindow-live-linger",
+        purpose="allowing only fixture-account linger activation",
+        input_data=b"xpra-test ALL=(root) NOPASSWD: /usr/bin/loginctl enable-linger 1001\n",
+    )
 
 
 def start_unrelated_resources(resources: LiveResources, target: str) -> None:
-    server = build_server_argv(
-        ("/bin/sleep", "3600"),
-        "elsewindow-unrelated",
-        DEFAULT_ENCODING_PROFILE,
+    server = (
+        "dbus-run-session",
+        "--",
+        *build_server_argv(
+            ("/bin/sleep", "3600"),
+            "elsewindow-unrelated",
+            DEFAULT_ENCODING_PROFILE,
+            DEFAULT_CLIPBOARD_POLICY,
+        ),
     )
     checked(
         [

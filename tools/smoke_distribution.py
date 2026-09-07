@@ -16,6 +16,9 @@ import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from tools.smoke_xpra_runtime import smoke_xpra_runtime
 
 
 class SmokeError(RuntimeError):
@@ -240,6 +243,12 @@ def smoke(
             for option in ("--encoding-profile", "--network-profile", "--diagnose")
         ):
             raise SmokeError("installed console help is incomplete")
+        smoke_xpra_runtime(
+            [str(command)],
+            root=root,
+            wheels=dependency_dist.resolve(),
+            environment=console_environment,
+        )
         missing = root / "missing-path"
         missing.mkdir()
         missing_environment = console_environment.copy()
@@ -302,7 +311,12 @@ def main() -> int:
             mypy=arguments.mypy,
             build_python=arguments.build_python,
         )
-    except (OSError, SmokeError, subprocess.SubprocessError, tarfile.TarError) as error:
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.SubprocessError,
+        tarfile.TarError,
+    ) as error:
         print(f"{arguments.kind} smoke failed: {error}", file=sys.stderr)
         return 1
     print(f"{arguments.kind} clean-install and strict-type smoke passed")

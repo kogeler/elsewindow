@@ -41,7 +41,7 @@ Changelog = "https://github.com/kogeler/elsewindow/blob/main/CHANGELOG.md"
 include = ["elsewindow*"]
 
 [tool.setuptools.package-data]
-elsewindow = ["live-cli.yml", "profiles.yml", "py.typed"]
+elsewindow = ["live-cli.yml", "profiles.yml", "py.typed", "requirements-xpra.in", "requirements-xpra.txt", "requirements-xpra-build.in", "requirements-xpra-build.txt"]
 
 [tool.setuptools.dynamic]
 version = { file = ".version" }
@@ -55,12 +55,14 @@ strict = true
 [tool.bandit]
 exclude_dirs = [
     "tests",
+    ".venvs",
     "venv-quality",
     "venv-docs",
     "venv-test",
     "venv-package",
     "venv-standalone",
     "venv-runtime",
+    "venv-xpra",
 ]
 skips = ["B101", "B108", "B404", "B603"]
 

@@ -14,6 +14,7 @@ from elsewindow.config import DEFAULT_NETWORK_PROFILE, SUPPORTED_NETWORK_PROFILE
 
 
 def _path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("elsewindow.config.prepared_launcher", lambda path: path)
     for name in ("ssh", "false", "python3", "xpra"):
         executable = tmp_path / name
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -34,6 +35,9 @@ def test_help_is_english_and_documents_both_authority_forms(
     assert "--backend" not in output
     assert "--encoding-profile" in output
     assert "--network-profile" in output
+    assert "--clipboard {off,to-server,both}" in output
+    assert "--log-level" in output
+    assert "debug-clipboard" in output
     assert "--diagnose" in output
     assert DEFAULT_NETWORK_PROFILE in output
     assert "application argv after --" in output
@@ -49,7 +53,7 @@ def test_diagnose_reports_versions_resources_and_missing_commands(
     assert cli.main(["--diagnose"]) == 1
 
     captured = capsys.readouterr()
-    assert "elsewindow: 0.1.0" in captured.out
+    assert f"elsewindow: {cli.__version__}" in captured.out
     assert "ssh-wrapper: 0.1.0" in captured.out
     assert "live-cli.yml: sha256:" in captured.out
     assert "profiles.yml: sha256:" in captured.out
@@ -62,9 +66,14 @@ def test_diagnose_reports_versions_resources_and_missing_commands(
 
 @pytest.mark.parametrize(
     ("option", "value"),
-    (("--encoding-profile", "auto"), ("--network-profile", "unreviewed")),
+    (
+        ("--encoding-profile", "auto"),
+        ("--network-profile", "unreviewed"),
+        ("--clipboard", "unreviewed"),
+        ("--log-level", "unreviewed"),
+    ),
 )
-def test_unreviewed_profile_is_rejected_before_session_start(
+def test_unreviewed_policy_is_rejected_before_session_start(
     monkeypatch: pytest.MonkeyPatch,
     option: str,
     value: str,
@@ -142,6 +151,8 @@ def test_main_sanitizes_expected_runtime_failure(
     monkeypatch.setattr(cli, "_run_with_signals", failed)
 
     assert cli.main(["--ssh-alias", "workstation", "--", "xterm"]) == 1
-    assert capsys.readouterr().err == (
-        "elsewindow: connection_lost: SSH master was lost\n"
-    )
+    output = capsys.readouterr().err
+    prefix, message = output.split("] ", 1)
+    assert prefix.startswith("elsewindow-local: [session=")
+    assert len(prefix.rsplit("=", 1)[1]) == 32
+    assert message == "connection_lost: SSH master was lost\n"

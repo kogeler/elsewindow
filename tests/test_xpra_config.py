@@ -12,6 +12,7 @@ from ssh_wrapper.errors import SSHError
 
 from elsewindow.cli import build_parser
 from elsewindow.config import (
+    DEFAULT_CLIPBOARD_POLICY,
     DEFAULT_ENCODING_PROFILE,
     DEFAULT_NETWORK_PROFILE,
     SUPPORTED_ENCODING_PROFILES,
@@ -27,6 +28,7 @@ def _executable(path: Path) -> None:
 
 @pytest.fixture
 def executable_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr("elsewindow.config.prepared_launcher", lambda path: path)
     for name in ("ssh", "false", "python3", "xpra"):
         _executable(tmp_path / name)
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -47,6 +49,9 @@ def test_source_defaults_and_application_argv(executable_path: Path) -> None:
     assert config.lease_timeout == 45
     assert config.encoding_profile == DEFAULT_ENCODING_PROFILE
     assert config.network_profile == DEFAULT_NETWORK_PROFILE
+    assert config.clipboard == DEFAULT_CLIPBOARD_POLICY
+    assert config.log_level == "warning"
+    assert config.persistent is False
     assert config.application == ("spotify", "value with spaces")
     assert config.authority_uri == "ssh://workstation"
 
@@ -71,7 +76,7 @@ def test_direct_ipv6_authority_has_an_unambiguous_uri(executable_path: Path) -> 
     assert config.connection.ssh_options == ("-l", "deploy", "-p", "2222")
 
 
-def test_reviewed_encoding_and_network_profiles_are_public_inputs(
+def test_reviewed_profiles_and_clipboard_policy_are_public_inputs(
     executable_path: Path,
 ) -> None:
     encoding_profile = next(
@@ -88,6 +93,10 @@ def test_reviewed_encoding_and_network_profiles_are_public_inputs(
             encoding_profile,
             "--network-profile",
             network_profile,
+            "--clipboard",
+            "to-server",
+            "--log-level=debug-clipboard",
+            "--persistent",
             "--",
             "xterm",
         ]
@@ -97,6 +106,9 @@ def test_reviewed_encoding_and_network_profiles_are_public_inputs(
 
     assert config.encoding_profile == encoding_profile
     assert config.network_profile == network_profile
+    assert config.clipboard == "to-server"
+    assert config.log_level == "debug-clipboard"
+    assert config.persistent is True
     assert config.xpra_path.is_absolute()
 
 
@@ -139,7 +151,18 @@ def test_invalid_authority_lifecycle_or_application_is_rejected(
         XpraConfig.from_namespace(parsed)
 
 
-@pytest.mark.parametrize("option", ("--backend", "--display", "--title"))
+@pytest.mark.parametrize(
+    "option",
+    (
+        "--backend",
+        "--display",
+        "--title",
+        "--cursors",
+        "--mousewheel",
+        "--dpi",
+        "--notifications",
+    ),
+)
 def test_display_backend_and_title_are_not_public_inputs(option: str) -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(

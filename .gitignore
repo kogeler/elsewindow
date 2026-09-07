@@ -1,10 +1,14 @@
 .agents/
 .codex/
+.venvs/
 venv-quality/
 venv-test/
 venv-package/
 venv-standalone/
 venv-runtime/
+venv-xpra/
+.venv-xpra.lock
+.venv-xpra-*/
 venv-docs/
 .pytest_cache/
 .ruff_cache/

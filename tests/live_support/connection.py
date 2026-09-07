@@ -11,6 +11,7 @@ from tools import container_payload
 
 from .process import (
     CLIENT_HOME,
+    CLIENT_XPRA_VENV,
     OWNER_LABEL,
     RUN_LABEL,
     TARGET_ALIAS,
@@ -188,7 +189,7 @@ def verify_client_confinement(
     mounts = json.loads(mounts_text)
     if not isinstance(mounts, list):
         raise LiveFailure("Podman returned malformed client mount metadata")
-    allowed_tmpfs = {"/tmp", "/work", "/home/box"}
+    allowed_tmpfs = {"/tmp", "/work", "/home/box", "/run"}
     for mount in mounts:
         if not isinstance(mount, dict):
             raise LiveFailure("Podman returned malformed client mount metadata")
@@ -235,6 +236,8 @@ def provision_client(
             f"{OWNER_LABEL}=live-client",
             "--network",
             network,
+            "--env",
+            f"ELSEWINDOW_XPRA_VENV={CLIENT_XPRA_VENV}",
             "--entrypoint",
             '["/usr/bin/tini","--","sleep","infinity"]',
             *policy,
@@ -305,6 +308,18 @@ def provision_client(
         purpose="verifying the clean-installed product and dependency",
     )
     verify_client_confinement(resources, client, network)
+    podman_exec(
+        resources,
+        client,
+        "env",
+        "PIP_NO_INDEX=1",
+        "PIP_FIND_LINKS=/usr/local/share/elsewindow/xpra-wheels",
+        "/usr/local/bin/python",
+        "-m",
+        "elsewindow",
+        "--prepare-xpra",
+        purpose="preparing the packaged local Xpra environment from verified offline wheels",
+    )
     return client
 
 
@@ -338,7 +353,15 @@ def verify_ssh_settings(
 
 def target_log(resources: LiveResources, target: str) -> str:
     completed = checked(
-        [resources.podman, "logs", target],
+        [
+            resources.podman,
+            "exec",
+            target,
+            "journalctl",
+            "--unit=elsewindow-sshd.service",
+            "--output=cat",
+            "--no-pager",
+        ],
         "reading the target log",
     )
     return (completed.stdout + completed.stderr).decode(errors="replace")

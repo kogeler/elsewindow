@@ -8,6 +8,8 @@
   [`ssh-wrapper==0.1.0`](https://pypi.org/project/ssh-wrapper/0.1.0/) wheel when
   preparing the runtime;
 - the reviewed maintained-fork Xpra packages locally and remotely;
+- local system Python venv support (`python3-venv` on the supported systems);
+- an accessible systemd journal on both hosts;
 - a local graphical session and a remote Linux account capable of running the
   Wayland Xpra server.
 
@@ -36,9 +38,10 @@ DEBs and their dependencies with APT rather than `dpkg -i`.
 After the first release, use either normal pip or pipx installation:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.1.0"
-# or: pipx install "elsewindow==0.1.0"
+python3.14 -m pip install "elsewindow==0.2.0"
+# or: pipx install "elsewindow==0.2.0"
 elsewindow --help
+elsewindow --prepare-xpra
 elsewindow --diagnose
 ```
 
@@ -51,8 +54,22 @@ make runtime-venv
 ./bin/elsewindow --help
 ```
 
-The launcher never creates a virtual environment or invokes pip. It refuses to
-start when `venv-runtime` or either installed project package is missing.
+The one make target prepares `venv-runtime` and a separate `venv-xpra` using the
+system Xpra interpreter, both beneath `.venvs/<machine-user-key>/`. Make and the
+repository launcher select this directory automatically from an
+application-specific hash of `/etc/machine-id` and the local UID. Each machine
+therefore prepares its own environments in a shared checkout. Run the same
+`make runtime-venv` command once on each machine; do not activate a venv manually.
+Old root-level environments are ignored and left untouched.
+
+Ordinary launcher startup never creates an environment
+or invokes pip. It refuses to start when either environment is missing or stale.
+See the [explicit setup command](cli.md#prepare-xpra) for the installed-package
+equivalent and the current-input validation contract.
+
+This setup does not change the system `xpra` command or the shell's `PATH`.
+Elsewindow uses its prepared Xpra launcher, whereas a plain `xpra opengl` still
+checks the distribution's system Python and its installed modules.
 
 After the first release, GitHub Releases also provide
 `elsewindow-linux-amd64` and `elsewindow-linux-arm64`. Download the file that
@@ -64,11 +81,17 @@ where selected, and distribution packages.
 
 ```bash
 chmod 0755 ./elsewindow-linux-amd64
+./elsewindow-linux-amd64 --prepare-xpra
 ./elsewindow-linux-amd64 --diagnose
 ./elsewindow-linux-amd64 --ssh-alias agents-a -- xterm
 ```
 
 ## Start An Application
+
+Standalone setup uses its bundled dependency lock to prepare a separate local
+Xpra venv. It does not require this repository, Make, an Elsewindow venv, or
+installation into the system Python. Subsequent sessions only validate the
+environment; system Xpra and its Python venv support remain prerequisites.
 
 With a trusted OpenSSH alias:
 
@@ -83,15 +106,20 @@ elsewindow --host host.example --user desktop-user -- /usr/bin/xterm
 ```
 
 Application arguments begin after `--`. To request the reviewed adaptive-alpha
-H.264 profile on the default gigabit LAN network profile:
+H.264 profile on the default gigabit LAN network profile while allowing only
+local-to-remote clipboard synchronization:
 
 ```bash
 elsewindow \
   --ssh-alias agents-a \
   --encoding-profile h264 \
   --network-profile gigabit_lan \
+  --clipboard=to-server \
   -- /opt/application/bin/application
 ```
 
-See [the Xpra guide](xpra.md) for all profiles, options, failure codes, and
+The [CLI reference](cli.md) owns every option, default, allowed value, and
+combination rule, including [clipboard policy](cli.md#clipboard),
+[logging](cli.md#log-level), and [persistent sessions](cli.md#persistent).
+See [the Xpra guide](xpra.md) for runtime behavior, failure codes, and
 ownership limits.

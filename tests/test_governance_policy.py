@@ -303,6 +303,8 @@ def test_current_locks_and_versions_validate_with_stdlib_helpers(
     )
     assert completed.returncode == 0, completed.stderr
     assert set(json.loads(output.read_text(encoding="utf-8"))["manifests"]) == {
+        "elsewindow/requirements-xpra.txt",
+        "elsewindow/requirements-xpra-build.txt",
         "requirements.txt",
         "requirements-docs.txt",
         "requirements-package.txt",
@@ -388,7 +390,15 @@ def test_distribution_contract_includes_runtime_yaml_and_console_entry() -> None
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert project["project"]["scripts"] == {"elsewindow": "elsewindow.cli:main"}
     assert project["tool"]["setuptools"]["package-data"] == {
-        "elsewindow": ["live-cli.yml", "profiles.yml", "py.typed"]
+        "elsewindow": [
+            "live-cli.yml",
+            "profiles.yml",
+            "py.typed",
+            "requirements-xpra.in",
+            "requirements-xpra.txt",
+            "requirements-xpra-build.in",
+            "requirements-xpra-build.txt",
+        ]
     }
     verifier = (ROOT / "tools/verify_distribution.py").read_text(encoding="utf-8")
     smoke = (ROOT / "tools/smoke_distribution.py").read_text(encoding="utf-8")
