@@ -9,21 +9,122 @@ One invocation owns one foreground OpenSSH ControlMaster. Every secondary
 operation requires its mux socket and is configured so it cannot authenticate
 or reconnect independently. OpenSSH forwarding, agent sharing, X11 forwarding,
 and configured local or remote commands are disabled. Xpra TCP, HTML, SSH
-upgrade, clipboard, audio, webcam, printing, file transfer, URL opening,
-notifications, and automatic reconnection are disabled.
+upgrade, audio, webcam, printing, file transfer, URL opening,
+and automatic reconnection are disabled.
 
-The remote server and application run in one heartbeat-supervised process
-group. Normal detach, cancellation, a signal, lease expiry, or master loss
+Application notifications and clipboard synchronization are the reviewed
+auxiliary data channels. Notifications are forwarded by default and can expose
+remote application titles, message bodies and icons on the local desktop;
+notification action/close responses return only through the owned Xpra channel.
+The [clipboard policy](cli.md#clipboard) defaults to bidirectional
+synchronization. Clipboard data is visible to the trusted remote account and
+application; narrow or disable synchronization when the local clipboard may
+contain data that should not cross that trust boundary.
+
+Each remote session owns a separate foreground `dbus-daemon` on a private Unix
+socket. It never adopts the account's desktop/user bus or forwards arbitrary
+D-Bus traffic. The daemon inherits the ordinary heartbeat process group or the
+persistent service cgroup and is explicitly reaped by the session supervisor.
+Xpra preserves only this supplied bus, does not launch another, and keeps
+D-Bus remote control disabled. Concurrent sessions have distinct buses;
+persistent reconnects retain the application's original bus.
+The local Xpra client uses its existing desktop bus to present notifications;
+its D-Bus control and bus autolaunch are also disabled.
+The current fork's notification presenter requires its client tray helper module.
+Elsewindow loads that module but explicitly disables server-side application tray
+forwarding and keeps Xpra's own tray icon hidden.
+
+Both targeted clipboard and general [debug logging](cli.md#log-level) can
+include sensitive data. Both choices warn; `warning` is the default. Persistent
+startup defers early diagnostics until its shared remote identity is known.
+The local terminal and journal aggregate four explicitly labeled local/remote
+Elsewindow and Xpra sources through the same severity filter. The remote journal
+stores only remote sources. Journal readers and administrators
+may see clipboard or application data. Use only non-sensitive debugging data.
+Journal permissions, rate limits, storage persistence and retention are host
+policy; Elsewindow does not modify them. Bounded native-message framing prevents
+log text from injecting journal metadata. Startup fails when a required journal
+is unavailable; later delivery failures are reported without killing an
+existing persistent application.
+
+Remote log subscriptions use only existing-master SSH channels. They need no
+privileged journal reader and create no TCP listener or persistent log file.
+Remote IPC directories are private and ownership-checked; observers remove
+only their own socket. The local decoder rejects oversized frames, unexpected
+metadata, and records for another session, and keeps remote PIDs as explicit
+source metadata rather than local process identity. Terminal rendering retains
+the source label and shared session ID on every line and strips control characters.
+Persistent log IDs are hashes scoped to the remote machine, account and
+application, not executable paths or arguments printed in logs. Concurrent
+subscribers have separate sockets; closing one does not remove another. Bounded
+nonblocking publication prevents a slow or lost observer from controlling the
+application lifetime. New connections do not replay disconnected log history.
+
+By default the remote server and application run in one heartbeat-supervised
+process group. Normal detach, cancellation, a signal, lease expiry, or master loss
 stops the local client first and then terminates only that recorded group and
 its private runtime state. The implementation never searches by executable
 name and never modifies an unrelated Xpra session. An application that
 deliberately escapes its process group can outlive this boundary.
 
+[Persistent mode](cli.md#persistent) explicitly changes that lifetime boundary.
+A transient systemd user service owns the supervisor, Xpra and application cgroup. Disconnect,
+cancellation and loss of the SSH master stop only local resources. A new
+invocation authenticates once and may resume the recorded service; no running
+invocation reconnects automatically. Application exit, including failure,
+ends Xpra and the service; `Restart=no` prevents accidental relaunch.
+
+Linger is checked on every persistent invocation. When disabled, a controlling
+terminal must supply exact `y` or `yes` before Elsewindow attempts to enable
+it for the current remote UID. If necessary, fixed `sudo loginctl` runs in a
+PTY on the same owned mux. Sudo reads its password directly; Python neither
+captures nor stores it. Refusal or lack of a terminal starts no service.
+Linger is an account-wide setting, remains enabled after the application exits,
+and keeps other user services alive after logout too. No packages are installed
+and there is no unattended-consent option.
+
+The private runtime registry uses bounded reads, atomic records, no-follow
+locks and serialized creation. Resumption validates the service's random
+ownership token, systemd invocation, PID/start time and Xpra argv metadata.
+An unrelated service or incompatible server/clipboard configuration is never
+stopped, replaced or silently adopted. Empty lock files are retained to avoid
+split-lock races; active records disappear with their owned service. The
+selected account is trusted and can modify its own services and registry.
+
 Public diagnostics are bounded and scrub private SSH runtime paths and control
 characters.
 
-`elsewindow --diagnose` performs no SSH connection. It reports only public
-versions, SHA-256 digests of packaged profiles, the Linux platform decision,
+Local Xpra additions have a separate private, owned venv. Only explicit
+[environment setup](cli.md#prepare-xpra) downloads or installs its hash-locked
+PyPI packages. Accelerator source builds use a hash-verified archive, separately
+locked temporary build tools, and no unpinned build isolation; no builder
+packages remain in the activated venv. Inherited pip configuration, alternate
+installation destinations, and extra requirement inputs cannot redirect setup;
+explicit index/find-links transport settings still require the locked hashes.
+System Xpra, GTK and native modules
+remain distribution-owned.
+Ordinary startup revalidates the current locks, interpreter, installed versions
+and file hashes; it does not repair or fall back to a different environment.
+Preparation refuses unowned directories and preserves the previous owned
+environment on failure. The Xpra interpreter uses isolated Python imports;
+the frozen launcher also restores the host native-library search path before
+starting system tools. The selected local user remains trusted to control
+their own environment and installed-file metadata.
+
+Default environment paths are scoped to the local machine and UID, including
+installed and standalone Xpra environments under shared XDG data directories.
+The namespace uses HMAC-SHA-256 with a fixed application-specific key, following
+the [systemd machine-ID guidance](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html).
+Neither the raw `/etc/machine-id` value nor a substring is placed in directory
+names or diagnostics. Missing, invalid, or uninitialized IDs fail closed;
+setup does not change the OS identity or fall back to another host's venv.
+An explicit Xpra directory override must itself be kept host-local. This is
+environment isolation, not protection against another trusted user with write
+access to the checkout or against systems cloned with identical machine IDs.
+
+The [diagnostic command](cli.md#informational-commands) performs no SSH
+connection. It reports only public versions, SHA-256 digests of packaged
+profiles, the Linux platform decision,
 and resolved local prerequisite commands. A missing command is emitted with
 the stable `elsewindow: missing_dependency:` prefix.
 
@@ -48,7 +149,8 @@ immutable copies again. It rechecks the confirmed inventory immediately before
 purging only that set. Actual DEB members must provide the native libva encoder
 and decoder, libyuv converter, GTK OpenGL client, common and server assets, X11
 bindings, and required Ubuntu Wayland modules in their declared owners. APT
-installs the exact local set plus `libva-drm2` and `python3-opengl`, after which
+installs the exact local set plus `libva-drm2`, `python3-opengl`, `python3-venv`,
+`dbus-daemon`, and `python3-dbus`, after which
 every consumed module is imported. The helper never uses `dpkg -i`, runs
 `autoremove`, changes APT sources, or purges an unrelated package.
 
@@ -63,3 +165,9 @@ OpenSSH privilege-separation account from legacy `nogroup` GID 65534 to the
 dedicated `_ssh` GID before execution, avoiding an unjustified full-range
 allocation. Installer and release-image verification use 4,096 IDs. Unbounded
 `auto`, `keep-id`, `nomap`, and `--userns=host` are forbidden.
+
+The live target runs systemd as PID 1 and adds only `SETPCAP` to its prior
+capability set so system services can reduce their own capability boundaries.
+It still excludes `SYS_ADMIN`, privileged mode and host namespaces. Its journal
+records SSH authentication, and package-provided Xpra/auxiliary SSH socket
+activation is masked so only the explicit test resources are started.

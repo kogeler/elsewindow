@@ -45,6 +45,11 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore \
     PYTHONDONTWRITEBYTECODE=1
 
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        --no-install-recommends make python3 dbus-daemon \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 1000 --shell /bin/bash box \
     && python -m pip install --quiet --only-binary=:all: \
         pip==26.1.1 \

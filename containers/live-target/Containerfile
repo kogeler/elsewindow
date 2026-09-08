@@ -10,9 +10,11 @@ RUN /bin/bash /usr/local/sbin/install-live-target \
 
 COPY containers/live-target/sshd.conf /etc/ssh/sshd_config.d/99-elsewindow-e2e.conf
 COPY containers/live-target/entrypoint.sh /usr/local/sbin/elsewindow-e2e-entrypoint
+COPY containers/live-target/sshd.service /etc/systemd/system/elsewindow-sshd.service
 
 RUN chmod 0644 /etc/ssh/sshd_config.d/99-elsewindow-e2e.conf \
     && chmod 0755 /usr/local/sbin/elsewindow-e2e-entrypoint \
+    && systemctl enable elsewindow-sshd.service \
     && /usr/sbin/sshd -t \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
@@ -28,7 +30,7 @@ COPY --chmod=0600 \
     xpra-release/archive.tar \
     /tmp/xpra-release/
 RUN /usr/bin/python3 /usr/local/libexec/install-release.py \
-    && install -d -m 0700 -o xpra-test -g xpra-test /run/user/1001 \
+    && systemctl mask xpra-server.socket xpra-server.service sshd-unix-local.socket \
     && rm -f /usr/local/libexec/install-release.py
 
 EXPOSE 22

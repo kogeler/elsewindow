@@ -16,8 +16,11 @@ from elsewindow.session import build_xpra_command_argv
 from tools.install_xpra_release import REQUIRED_XPRA_PACKAGES
 
 from .connection import target_log
+from .journal import start_client_journal, verify_journals
 from .process import (
+    CLIENT_XPRA_VENV,
     LIVE_DRIVER,
+    LIVE_EVIDENCE_PREFIX,
     LiveFailure,
     LiveResources,
     checked,
@@ -27,6 +30,8 @@ from .process import (
 from .xpra_target import (
     ABRUPT_MARKER,
     OWNED_MARKER,
+    PERSISTENT_CONNECTIONS,
+    PERSISTENT_MARKER,
     install_xpra_fixture,
     owned_state_absent,
     start_unrelated_resources,
@@ -102,7 +107,11 @@ def _verify_xpra_install(
     podman_exec(
         resources,
         container,
-        *build_xpra_command_argv(canonical_role, "version", "xpra"),
+        *build_xpra_command_argv(
+            canonical_role,
+            "version",
+            f"{CLIENT_XPRA_VENV}/bin/xpra" if role == "client" else "xpra",
+        ),
         purpose=f"running the canonical {role} Xpra version command",
     )
     return release
@@ -164,6 +173,8 @@ def client_driver_command(client: str, case: str) -> tuple[list[str], dict[str, 
             "--env",
             "ELSEWINDOW_LIVE_INSTALLED_ROOT=/home/box/.local",
             client,
+            "/usr/bin/dbus-run-session",
+            "--",
             "/usr/local/bin/python",
             "/work/src/tests/live_xpra_e2e.py",
             "--case",
@@ -185,29 +196,117 @@ def client_driver_command(client: str, case: str) -> tuple[list[str], dict[str, 
 def run_driver(resources: LiveResources, client: str, case: str) -> dict[str, object]:
     command, environment = client_driver_command(client, case)
     command[0] = resources.podman
+    answer = None
+    if case in {"linger", "linger-declined"}:
+        command[2:2] = ["--interactive", "--tty"]
+        answer = "yes\n" if case == "linger" else "no\n"
     completed = run_process(
         command,
         env=environment,
         text=True,
         capture_output=True,
         check=False,
+        input=answer,
     )
     if completed.returncode != 0:
-        detail = completed.stderr.strip()
-        if detail:
-            print(detail, file=sys.stderr)
+        for stream in (completed.stdout, completed.stderr):
+            notifications = "\n".join(
+                line for line in stream.splitlines() if "notif" in line.lower()
+            )[-8192:]
+            if notifications:
+                print(notifications, file=sys.stderr)
+            detail = stream[-4096:].strip()
+            if detail:
+                print(detail, file=sys.stderr)
         raise LiveFailure(
             f"the {case} Xpra case failed with status {completed.returncode}"
         )
     try:
-        evidence = json.loads(completed.stdout.strip())
-    except (TypeError, ValueError) as error:
+        line = completed.stdout.strip().splitlines()[-1]
+        if not line.startswith(LIVE_EVIDENCE_PREFIX):
+            raise ValueError("missing evidence prefix")
+        evidence = json.loads(line.removeprefix(LIVE_EVIDENCE_PREFIX))
+    except (IndexError, TypeError, ValueError) as error:
         raise LiveFailure(
             f"the {case} Xpra driver returned malformed evidence"
         ) from error
     if not isinstance(evidence, dict):
         raise LiveFailure(f"the {case} Xpra driver returned non-object evidence")
+    assert resources.target_name is not None
+    verify_journals(
+        resources,
+        resources.target_name,
+        client,
+        evidence,
+        completed.stdout,
+        completed.stderr,
+        terminal_merged=answer is not None,
+    )
     return evidence
+
+
+def run_authenticated_driver(
+    resources: LiveResources, target: str, client: str, case: str
+) -> dict[str, object]:
+    """Check every case against the same authoritative SSH journal."""
+    before = target_log(resources, target).count("Accepted publickey for xpra-test")
+    evidence = run_driver(resources, client, case)
+    after = target_log(resources, target).count("Accepted publickey for xpra-test")
+    expected = (
+        PERSISTENT_CONNECTIONS if case == "persistent" else 2 if case == "detach" else 1
+    )
+    if after != before + expected:
+        raise LiveFailure(
+            "one Xpra invocation did not perform exactly one authentication"
+        )
+    return evidence
+
+
+def verify_case_cleanup(
+    resources: LiveResources, target: str, evidence: dict[str, object], marker: str
+) -> None:
+    displays = evidence.get("displays")
+    if (
+        not isinstance(displays, list)
+        or not displays
+        or any(
+            not isinstance(display, str)
+            or not display.startswith("wayland-")
+            or not display[8:].isdigit()
+            for display in displays
+        )
+    ):
+        raise LiveFailure("the Xpra display evidence is invalid")
+    for display in set(displays):
+        wait_until(
+            f"owned Xpra cleanup on {display}",
+            lambda display=display: owned_state_absent(
+                resources, target, display, marker
+            ),
+        )
+    buses = evidence.get("buses")
+    if not isinstance(buses, list) or not buses:
+        raise LiveFailure("the private bus lifecycle evidence is missing")
+    for bus in buses:
+        if (
+            not isinstance(bus, dict)
+            or not isinstance(bus.get("pid"), int)
+            or not str(bus.get("start", "")).isdigit()
+        ):
+            raise LiveFailure("the private bus process identity is invalid")
+
+        def ended(bus: dict = bus) -> bool:
+            output = run_process(
+                [resources.podman, "exec", target, "cat", f"/proc/{bus['pid']}/stat"],
+                capture_output=True,
+                check=False,
+            )
+            if output.returncode:
+                return True
+            fields = output.stdout.rsplit(b")", 1)[1].split()
+            return fields[19].decode() != bus["start"] or fields[0] == b"Z"
+
+        wait_until("owned notification bus cleanup", ended)
 
 
 def run_xpra_matrix(
@@ -223,6 +322,48 @@ def run_xpra_matrix(
     if client_release != target_release:
         raise LiveFailure("the Xpra target and client releases differ")
     install_xpra_fixture(resources, target)
+    start_client_journal(resources, client)
+    start_client_display(resources, client)
+    graphics = podman_exec(
+        resources,
+        client,
+        "env",
+        f"DISPLAY={CLIENT_DISPLAY}",
+        f"{CLIENT_XPRA_VENV}/bin/xpra",
+        "opengl",
+        purpose="checking the prepared Xpra client's public OpenGL properties",
+    ).decode()
+    properties = dict(
+        line.split("=", 1) for line in graphics.splitlines() if "=" in line
+    )
+    if (
+        properties.get("zerocopy") != "True"
+        or not properties.get("accelerate")
+        or properties.get("accelerate") != properties.get("pyopengl")
+    ):
+        raise LiveFailure(
+            "the prepared Xpra client did not load its matched OpenGL accelerator"
+        )
+    print(
+        "live: prepared Xpra client reports matched PyOpenGL and zerocopy=True",
+        file=sys.stderr,
+    )
+    for case in ("linger-declined", "linger"):
+        evidence = run_authenticated_driver(resources, target, client, case)
+        if case == "linger-declined" and evidence.get("declined") is not True:
+            raise LiveFailure("the linger refusal case did not refuse")
+        if case == "linger":
+            verify_case_cleanup(resources, target, evidence, PERSISTENT_MARKER)
+        podman_exec(
+            resources,
+            target,
+            "test",
+            *(() if case == "linger" else ("!",)),
+            "-e",
+            "/var/lib/systemd/linger/xpra-test",
+            purpose="checking fixture linger",
+        )
+        print(f"live: {case} lifecycle and journals verified", file=sys.stderr)
     start_unrelated_resources(resources, target)
     try:
         wait_until(
@@ -234,36 +375,29 @@ def run_xpra_matrix(
         raise LiveFailure(
             f"{error}; readiness={unrelated_state(resources, target)}{suffix}"
         ) from error
-    start_client_display(resources, client)
-
-    for case, marker in (("detach", OWNED_MARKER), ("abrupt", ABRUPT_MARKER)):
-        accepted_before = target_log(resources, target).count(
-            "Accepted publickey for xpra-test"
-        )
-        evidence = run_driver(resources, client, case)
-        display = evidence.get("display")
-        if not (
-            isinstance(display, str)
-            and display.startswith("wayland-")
-            and display[8:].isdigit()
-        ):
-            raise LiveFailure(f"the {case} Xpra display evidence is invalid")
-        accepted_after = target_log(resources, target).count(
-            "Accepted publickey for xpra-test"
-        )
-        if accepted_after != accepted_before + 1:
-            raise LiveFailure("one Xpra run did not perform exactly one authentication")
-        wait_until(
-            f"owned Xpra cleanup on {display}",
-            lambda display=display, marker=marker: owned_state_absent(
-                resources, target, display, marker
-            ),
-        )
+    for case, marker in (
+        ("detach", OWNED_MARKER),
+        ("abrupt", ABRUPT_MARKER),
+        ("persistent", PERSISTENT_MARKER),
+    ):
+        evidence = run_authenticated_driver(resources, target, client, case)
+        verify_case_cleanup(resources, target, evidence, marker)
         verify_unrelated(resources, target)
+        if case == "persistent":
+            podman_exec(
+                resources,
+                target,
+                "sh",
+                "-ceu",
+                "test -z \"$(find /run/user/1001/elsewindow-persistent -name '*.json' -print)\"; "
+                "test -z \"$(runuser -u xpra-test -- env XDG_RUNTIME_DIR=/run/user/1001 systemctl --user --no-legend list-units 'elsewindow-*.service')\"",
+                purpose="verifying persistent registry and unit cleanup",
+            )
+        print(f"live: {case} lifecycle and journals verified", file=sys.stderr)
 
     release = target_release
     print(
-        "live: Xpra SSH lifecycle matrix passed with fork release "
+        "live: Xpra SSH lifecycle and dual-host journal matrix passed with fork release "
         f"{release['release_id']} ({release['version']}, {release['commit']})",
         file=sys.stderr,
     )

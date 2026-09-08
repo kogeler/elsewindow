@@ -18,6 +18,8 @@ AUDIENCES = ("quality", "test", "package", "standalone", "docs")
 LOCK_NAMES = (
     "requirements.txt",
     *(f"requirements-{audience}.txt" for audience in AUDIENCES),
+    "elsewindow/requirements-xpra.txt",
+    "elsewindow/requirements-xpra-build.txt",
 )
 LOCK_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)\s+\\$")
 LOCK_HASH = re.compile(r"^--hash=sha256:([0-9a-f]{64})(?:\s+\\)?$")
@@ -220,6 +222,18 @@ def build_manifests(root: Path) -> dict[str, dict[str, object]]:
                 "development",
             )
             for audience in AUDIENCES
+        ),
+        (
+            "elsewindow/requirements-xpra.txt",
+            "elsewindow/requirements-xpra.in",
+            False,
+            "runtime",
+        ),
+        (
+            "elsewindow/requirements-xpra-build.txt",
+            "elsewindow/requirements-xpra-build.in",
+            False,
+            "development",
         ),
     )
     manifests: dict[str, dict[str, object]] = {}

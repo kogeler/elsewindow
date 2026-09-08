@@ -1,0 +1,13 @@
+[Unit]
+Description=Disposable Elsewindow SSH target
+After=network.target systemd-logind.service
+Wants=systemd-logind.service
+
+[Service]
+ExecStart=/usr/sbin/sshd -D -e
+RuntimeDirectory=sshd
+RuntimeDirectoryMode=0755
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

@@ -18,8 +18,10 @@ from typing import Any, Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LIVE_DRIVER = PROJECT_ROOT / "tests/live_xpra_e2e.py"
+LIVE_EVIDENCE_PREFIX = "elsewindow-live-evidence: "
 TARGET_ALIAS = "elsewindow-podman-e2e"
 CLIENT_HOME = Path("/home/box")
+CLIENT_XPRA_VENV = "/work/xpra-venv"
 OWNER_LABEL = "io.elsewindow.live.owner"
 RUN_LABEL = "io.elsewindow.live.run"
 CLEANUP_ATTEMPTS = 5

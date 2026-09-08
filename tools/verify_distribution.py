@@ -27,13 +27,24 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_FILES = {
     "__init__.py",
     "__main__.py",
+    "_persistent_agent.py",
     "cli.py",
     "config.py",
     "live-cli.yml",
     "live_config.py",
+    "journal.py",
+    "log_transport.py",
+    "machine.py",
+    "persistent.py",
     "profiles.yml",
     "py.typed",
     "session.py",
+    "session_bus.py",
+    "xpra_runtime.py",
+    "requirements-xpra.in",
+    "requirements-xpra.txt",
+    "requirements-xpra-build.in",
+    "requirements-xpra-build.txt",
 }
 PROJECT_URLS = {
     "Homepage, https://kogeler.github.io/elsewindow/",
@@ -249,7 +260,14 @@ def verify_wheel(path: Path, *, root: Path, version: str, epoch: int) -> None:
             project=project,
             runtime_requirements=runtime_requirements,
         )
-        for resource in ("live-cli.yml", "profiles.yml"):
+        for resource in (
+            "live-cli.yml",
+            "profiles.yml",
+            "requirements-xpra.in",
+            "requirements-xpra.txt",
+            "requirements-xpra-build.in",
+            "requirements-xpra-build.txt",
+        ):
             if (
                 archive.read(f"elsewindow/{resource}")
                 != (root / "elsewindow" / resource).read_bytes()

@@ -88,6 +88,7 @@ SPECS: Final = (
             ROOT / "containers/live-target/install-base.sh",
             ROOT / "containers/live-target/entrypoint.sh",
             ROOT / "containers/live-target/sshd.conf",
+            ROOT / "containers/live-target/sshd.service",
             *COMMON_INPUTS,
         ),
     ),
@@ -99,7 +100,10 @@ SPECS: Final = (
         (
             ROOT / "containers/toolbox/Containerfile",
             ROOT / "containers/toolbox/entrypoint.sh",
+            ROOT / "containers/toolbox/journald.conf",
             ROOT / "requirements.txt",
+            ROOT / "elsewindow/requirements-xpra.txt",
+            ROOT / "elsewindow/requirements-xpra-build.txt",
             ROOT / "tools/container_payload.py",
             *COMMON_INPUTS,
         ),

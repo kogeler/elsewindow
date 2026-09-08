@@ -29,6 +29,7 @@ from .process import (
     file_digest,
     file_metadata,
     parse_policy,
+    podman_exec,
 )
 from .topology import create_internal_network, provision_target
 from .xpra import run_xpra_matrix
@@ -106,6 +107,19 @@ def run_live(arguments: Arguments, key: KeyMaterial, resources: LiveResources) -
         if target is not None:
             print(
                 f"live target log:\n{target_log(resources, target)[-8192:]}",
+                file=sys.stderr,
+            )
+            print(
+                podman_exec(
+                    resources,
+                    target,
+                    "journalctl",
+                    "--no-pager",
+                    "--output=cat",
+                    "-n",
+                    "80",
+                    purpose="reading target service diagnostics",
+                ).decode(errors="replace")[-8192:],
                 file=sys.stderr,
             )
         raise

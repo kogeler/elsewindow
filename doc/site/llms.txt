@@ -9,6 +9,7 @@ OpenSSH ControlMaster. It supports CPython 3.13 and 3.14 on Linux.
 Documentation routes:
 - /elsewindow/
 - /elsewindow/getting-started/
+- /elsewindow/cli/
 - /elsewindow/xpra/
 - /elsewindow/security/
 - /elsewindow/architecture/

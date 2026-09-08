@@ -12,10 +12,12 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash box \
         --no-install-recommends \
         openssh-client \
         procps \
+        systemd \
         tini \
         python3-opengl \
         x11-utils \
         xauth \
+        xdotool \
         xfonts-base \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
@@ -27,6 +29,7 @@ RUN python -m pip install --quiet --require-hashes \
     && rm -f /tmp/requirements.txt
 
 COPY tools/container_payload.py /usr/local/libexec/container-payload
+COPY --chmod=0644 containers/toolbox/journald.conf /etc/systemd/journald.conf.d/elsewindow-live.conf
 COPY containers/toolbox/entrypoint.sh /usr/local/sbin/toolbox-entrypoint
 COPY --chmod=0700 \
     containers/xpra/install-release.py \
@@ -40,6 +43,13 @@ RUN chmod 0755 /usr/local/libexec/container-payload \
         /usr/local/sbin/toolbox-entrypoint \
     && /usr/bin/python3 /usr/local/libexec/install-release.py \
     && rm -f /usr/local/libexec/install-release.py
+
+COPY elsewindow/requirements-xpra.txt /usr/local/share/elsewindow/requirements-xpra.txt
+COPY elsewindow/requirements-xpra-build.txt /usr/local/share/elsewindow/requirements-xpra-build.txt
+RUN python -m pip download --quiet --require-hashes --only-binary=:all: \
+        --no-deps --dest /usr/local/share/elsewindow/xpra-wheels \
+        --requirement /usr/local/share/elsewindow/requirements-xpra.txt \
+        --requirement /usr/local/share/elsewindow/requirements-xpra-build.txt
 
 USER box
 WORKDIR /work

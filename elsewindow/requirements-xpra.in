@@ -1,0 +1,4 @@
+# Isolated local Xpra additions; keep this pair on the same upstream release.
+# System Xpra, GTK, and native codecs remain owned by their distribution DEBs.
+PyOpenGL==3.1.10
+PyOpenGL-accelerate==3.1.10

@@ -36,8 +36,10 @@ PROFILE_FIELDS = frozenset(
     }
 )
 ROLE_FIELDS = {
-    "server": frozenset({"base", "commands", "diagnostics", "lifecycle", "transports"}),
-    "client": frozenset({"base", "commands", "diagnostics", "transports"}),
+    "server": frozenset(
+        {"base", "clipboard", "commands", "diagnostics", "lifecycle", "transports"}
+    ),
+    "client": frozenset({"base", "clipboard", "commands", "diagnostics", "transports"}),
 }
 ROLE_COMMANDS = {
     "server": frozenset({"info", "version"}),
@@ -292,9 +294,24 @@ def load_live_cli(path: Path = LIVE_CLI_PATH) -> dict[str, dict[str, Any]]:
         if not isinstance(role_payload, dict) or set(role_payload) != expected_fields:
             raise LiveConfigError(f"live CLI {role} fields are inconsistent")
         role_result: dict[str, Any] = {}
-        for block in expected_fields - {"commands", "transports"}:
+        for block in expected_fields - {"commands", "transports", "clipboard"}:
             options = _option_list(role_payload[block], label=f"{role}.{block}")
             role_result[block] = options
+            all_options.extend(options)
+        clipboard = role_payload["clipboard"]
+        if (
+            not isinstance(clipboard, dict)
+            or not clipboard
+            or any(not KEY_RE.fullmatch(policy) for policy in clipboard)
+        ):
+            raise LiveConfigError(
+                f"live CLI {role} clipboard policies are inconsistent"
+            )
+        role_result["clipboard"] = {
+            policy: _option_list(options, label=f"{role}.clipboard.{policy}")
+            for policy, options in clipboard.items()
+        }
+        for options in role_result["clipboard"].values():
             all_options.extend(options)
         commands = role_payload.get("commands")
         if not isinstance(commands, dict) or set(commands) != ROLE_COMMANDS[role]:
