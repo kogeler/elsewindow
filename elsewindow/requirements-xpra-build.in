@@ -1,5 +1,5 @@
 # Temporary, isolated build tools for a hash-verified Xpra accelerator sdist.
 # Removed after preparation; never added to either runtime's package inventory.
 Cython==3.3.0
-numpy==2.5.2
+numpy==2.5.3
 setuptools==84.0.0
