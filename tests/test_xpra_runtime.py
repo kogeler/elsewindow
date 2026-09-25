@@ -1,21 +1,26 @@
 # Copyright (c) 2026 kogeler
 # SPDX-License-Identifier: MIT
 
-"""Private Xpra environment preparation, integrity and interpreter boundaries."""
+"""Isolated Xpra environment preparation, integrity and interpreter boundaries."""
 
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
+import io
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from elsewindow import cli, machine
 from elsewindow import xpra_runtime as runtime
+from elsewindow.config import XpraConfig
 
 
 def _packages(prefix: Path) -> None:
@@ -27,6 +32,7 @@ def _packages(prefix: Path) -> None:
         metadata = f"{name.replace('-', '_')}-{version}.dist-info"
         files = {
             f"{package}/__init__.py": f"__version__ = {version!r}\n",
+            f"{package}/data, with spaces.txt": "fixture data\n",
             f"{metadata}/METADATA": f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
         }
         files[f"{package}/{'GL' if name == 'pyopengl' else 'formathandler'}.py"] = (
@@ -43,11 +49,11 @@ def _packages(prefix: Path) -> None:
                 .rstrip(b"=")
                 .decode()
             )
-            records.append(f"{relative},sha256={digest},{len(data)}")
-        records.append(f"{metadata}/RECORD,,")
-        (site / metadata / "RECORD").write_text(
-            "\n".join(records) + "\n", encoding="utf-8"
-        )
+            records.append((relative, f"sha256={digest}", str(len(data))))
+        records.append((f"{metadata}/RECORD", "", ""))
+        inventory = io.StringIO(newline="")
+        csv.writer(inventory).writerows(records)
+        (site / metadata / "RECORD").write_text(inventory.getvalue(), encoding="utf-8")
 
 
 @pytest.fixture
@@ -81,7 +87,7 @@ def setup(
     return xpra, directory, calls
 
 
-def test_prepare_private_env_preserves_argv_and_revalidates_without_installs(
+def test_prepare_isolated_env_preserves_argv_and_revalidates_without_installs(
     setup: tuple[Path, Path, list[list[str]]],
 ) -> None:
     xpra, directory, calls = setup
@@ -115,14 +121,97 @@ def test_prepare_private_env_preserves_argv_and_revalidates_without_installs(
     assert all("pip" not in call and "venv" not in call for call in calls)
 
 
+@pytest.mark.parametrize("mode", (0o700, 0o750, 0o755, 0o770, 0o777))
+def test_prepare_and_startup_accept_shared_permissions_and_mapped_owner(
+    setup: tuple[Path, Path, list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: int,
+) -> None:
+    xpra, directory, calls = setup
+    launcher = runtime.prepare(xpra)
+    directory.chmod(mode)
+    mapped_uid = directory.stat().st_uid + 1
+    monkeypatch.setattr(runtime.os, "getuid", lambda: mapped_uid)
+    calls.clear()
+    assert runtime.prepared_launcher(xpra) == launcher
+    assert runtime.prepare(xpra) == launcher
+    assert all("pip" not in call and "venv" not in call for call in calls)
+
+
+@pytest.mark.parametrize("alias", ("file", "directory"))
+def test_setup_diagnosis_and_session_share_symlinked_xpra(
+    setup: tuple[Path, Path, list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    alias: str,
+) -> None:
+    xpra, directory, calls = setup
+    commands = directory.parent / "commands"
+    commands.mkdir()
+    if alias == "file":
+        (commands / "xpra").symlink_to(xpra)
+    else:
+        (commands / "xpra").write_bytes(xpra.read_bytes())
+        (commands / "xpra").chmod(0o755)
+        linked = commands.with_name("linked commands")
+        linked.symlink_to(commands, target_is_directory=True)
+        commands = linked
+    monkeypatch.setenv("PATH", str(commands), prepend=os.pathsep)
+    monkeypatch.setattr(cli, "_diagnose_optional", lambda: None)
+    sessions: list[XpraConfig] = []
+
+    async def started(config: XpraConfig) -> int:
+        sessions.append(config)
+        return 0
+
+    monkeypatch.setattr(cli, "_run_with_signals", started)
+    assert cli.main(["--prepare-xpra"]) == 0
+    assert "environment is ready" in capsys.readouterr().out
+    calls.clear()
+    assert cli.main(["--diagnose"]) == 0
+    assert "xpra-environment: verified" in capsys.readouterr().out
+    assert cli.main(["--ssh-alias", "workstation", "--persistent", "--", "xterm"]) == 0
+    assert len(sessions) == 1
+    assert sessions[0].xpra_path == directory / "bin/xpra"
+    assert all("pip" not in call and "venv" not in call for call in calls)
+
+
+@pytest.mark.parametrize("operation", ("startup", "setup"))
+def test_validation_timeout_preserves_environment_without_reinstall(
+    setup: tuple[Path, Path, list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    xpra, directory, calls = setup
+    runtime.prepare(xpra)
+    state = (directory / runtime.STATE_NAME).read_bytes()
+    original = runtime.subprocess.run
+
+    def slow(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if arguments[-2] == runtime.PROBE:
+            raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+        return original(arguments, **kwargs)
+
+    monkeypatch.setattr(runtime.subprocess, "run", slow)
+    calls.clear()
+    validate = runtime.prepared_launcher if operation == "startup" else runtime.prepare
+    with pytest.raises(runtime.XpraRuntimeError, match="timed out") as raised:
+        validate(xpra)
+    assert "missing or stale" not in str(raised.value)
+    assert runtime.SETUP_HINT not in str(raised.value)
+    assert (directory / runtime.STATE_NAME).read_bytes() == state
+    assert all("pip" not in call and "venv" not in call for call in calls)
+    assert not list(directory.parent.glob(f".{directory.name}-*"))
+
+
 @pytest.mark.parametrize(
     "changed",
     (
         "lock",
         "build-lock",
         "module",
+        "missing-file",
         "launcher",
-        "mode",
         "python",
         "record",
         "extra-package",
@@ -145,10 +234,12 @@ def test_startup_rejects_current_filesystem_changes_without_repair(
             "raise RuntimeError('must not import a modified module')\n",
             encoding="utf-8",
         )
+    elif changed == "missing-file":
+        next(
+            directory.glob("lib/python*/site-packages/OpenGL/data, with spaces.txt")
+        ).unlink()
     elif changed == "launcher":
         (directory / "bin/xpra").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    elif changed == "mode":
-        directory.chmod(0o755)
     elif changed == "record":
         (directory / runtime.STATE_NAME).write_text("[]", encoding="utf-8")
     elif changed == "python":
@@ -190,11 +281,13 @@ def test_failed_repair_keeps_previous_owned_environment(
     assert not list(directory.parent.glob(f".{directory.name}-*"))
 
 
+@pytest.mark.parametrize("mode", (0o700, 0o777))
 def test_successful_repair_replaces_only_owned_environment(
-    setup: tuple[Path, Path, list[list[str]]],
+    setup: tuple[Path, Path, list[list[str]]], mode: int
 ) -> None:
     xpra, directory, _calls = setup
     runtime.prepare(xpra)
+    directory.chmod(mode)
     unrelated = directory.parent / "unrelated.txt"
     unrelated.write_text("keep", encoding="utf-8")
     (directory / runtime.LOCK_PATH.name).write_text("stale\n", encoding="utf-8")
@@ -204,7 +297,7 @@ def test_successful_repair_replaces_only_owned_environment(
     assert not list(directory.parent.glob(f".{directory.name}-*"))
 
 
-@pytest.mark.parametrize("kind", ("foreign", "symlink", "insecure"))
+@pytest.mark.parametrize("kind", ("foreign", "symlink", "unrecorded-shared"))
 def test_prepare_never_replaces_unowned_directories(
     setup: tuple[Path, Path, list[list[str]]], kind: str
 ) -> None:

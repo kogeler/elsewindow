@@ -30,11 +30,19 @@ ERRORS = {
     "persistent_unsafe_state": "persistent session state has unsafe ownership, permissions or contents",
     "persistent_identity_mismatch": "the existing persistent service does not match its recorded ownership",
     "persistent_configuration_mismatch": "the existing session uses different server, clipboard or logging settings, or an older helper; use compatible settings or exit the application first",
+    "persistent_environment_mismatch": "the existing session uses different application environment values; reconnect with its original --env values or exit the application first",
     "journal_unavailable": "the remote system journal is unavailable",
     "persistent_busy": "the persistent service is still starting or stopping; retry shortly",
     "persistent_start_failed": "could not start the persistent user service; retry to inspect its state",
     "invalid_application": "the remote application is not a valid executable or its arguments exceed the limits",
+    "invalid_application_environment": "the application environment has invalid or reserved names, invalid values, or exceeds the limits",
 }
+
+
+def _server_template(server: tuple[str, ...]) -> list[str]:
+    # The remote agent rebuilds this child from the separate application payload.
+    child_option = "--start-child="
+    return [child_option if arg.startswith(child_option) else arg for arg in server]
 
 
 def open_terminal() -> int:
@@ -74,7 +82,7 @@ async def confirm_linger() -> None:
         if response not in {b"y", b"yes"}:
             raise SSHError(
                 "persistent_linger_declined",
-                "remote linger was not enabled; no session was started",
+                "remote linger was not enabled",
             )
     finally:
         loop.remove_reader(descriptor)
@@ -92,17 +100,20 @@ class PersistentSession:
         *,
         log_level: str = DEFAULT_LOG_LEVEL,
         journal: Journal | None = None,
+        application_environment: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self._mux = mux
         self._interactive = interactive
         self._poll_interval = poll_interval
         self.log_level = log_level
+        self.application_environment = dict(application_environment)
         self.journal = journal or Journal(log_level, "client")
         self._source = remote_source(
             files("elsewindow").joinpath("_persistent_agent.py").read_text()
         )
         self.record: dict[str, Any] = {}
         self.identity: dict[str, str] = {}
+        self._prepared = False
 
     def command(self, action: str, request: dict[str, Any]) -> str:
         return shlex.join(
@@ -114,7 +125,11 @@ class PersistentSession:
                 action,
                 agent.encode(
                     request
-                    | {"log_level": self.log_level, "log_session": self.journal.session}
+                    | {
+                        "log_level": self.log_level,
+                        "log_session": self.journal.session,
+                        "log_deferred": self.journal.deferred,
+                    }
                 ),
             )
         )
@@ -141,7 +156,13 @@ class PersistentSession:
         return result
 
     async def identify(self, application: tuple[str, ...]) -> str:
-        result = await self.call("identify", {"application": list(application)})
+        result = await self.call(
+            "identify",
+            {
+                "application": list(application),
+                "application_environment": self.application_environment,
+            },
+        )
         for name in ("key", "log_session"):
             if (
                 not isinstance(result.get(name), str)
@@ -153,10 +174,18 @@ class PersistentSession:
         self.identity = {name: result[name] for name in ("key", "log_session")}
         return self.identity["log_session"]
 
-    async def start(
-        self, application: tuple[str, ...], server: tuple[str, ...]
-    ) -> None:
+    async def _probe_prerequisites(self) -> dict[str, Any]:
         probe = await self.call("probe", {})
+        if set(probe) != {"linger", "manager"} or any(
+            type(value) is not bool for value in probe.values()
+        ):
+            raise SSHError(
+                "persistent_operation_failed", "invalid persistent prerequisite reply"
+            )
+        return probe
+
+    async def _check_prerequisites(self) -> None:
+        probe = await self._probe_prerequisites()
         if probe.get("linger") is False:
             self.journal.emit(PRIORITIES["info"], "remote linger consent is required")
             try:
@@ -171,15 +200,72 @@ class PersistentSession:
             self.journal.emit(
                 PRIORITIES["info"], "remote linger was enabled with consent"
             )
-            probe = await self.call("probe", {})
+            probe = await self._probe_prerequisites()
         if probe.get("linger") is not True or probe.get("manager") is not True:
             raise SSHError(
                 "persistent_systemd_unavailable",
                 ERRORS["persistent_systemd_unavailable"],
             )
+        self._prepared = True
+
+    async def prepare(self, application: tuple[str, ...]) -> bool:
+        """Disable persistence only before creation and without recorded state."""
+        try:
+            await self._check_prerequisites()
+        except SSHError as error:
+            if error.code not in {
+                "persistent_systemd_unavailable",
+                "persistent_linger_failed",
+                "persistent_linger_declined",
+                "persistent_linger_consent_required",
+            }:
+                raise
+            fallback = await self.call(
+                "ordinary-fallback",
+                {
+                    "application": list(application),
+                    "application_environment": self.application_environment,
+                },
+            )
+            if fallback.get("allowed") is not True:
+                self.journal.emit(
+                    PRIORITIES["warning"],
+                    "Persistence is unavailable, but recorded session state prevents an "
+                    "ordinary fallback. Restore the remote systemd user manager and linger "
+                    "to resume the existing session; no duplicate application was started.",
+                )
+                raise
+            self.journal.emit(
+                PRIORITIES["warning"],
+                "Persistence disabled for this session: remote systemd or linger is "
+                "unavailable or consent was not granted. On Debian/Ubuntu, install "
+                "systemd libpam-systemd on the remote host, enable its user manager, "
+                "and approve linger when prompted. Continuing as an ordinary session: "
+                "disconnecting the client or SSH will stop the application.",
+            )
+            return False
+        return True
+
+    async def start(
+        self,
+        application: tuple[str, ...],
+        server: tuple[str, ...],
+        *,
+        requested_server: tuple[str, ...] | None = None,
+        server_features: dict[str, Any] | None = None,
+    ) -> None:
+        if not self._prepared:
+            await self._check_prerequisites()
         self._record(
             await self.call(
-                "ensure", {"application": list(application), "server": list(server)}
+                "ensure",
+                {
+                    "application": list(application),
+                    "application_environment": self.application_environment,
+                    "server": _server_template(server),
+                    "requested_server": _server_template(requested_server or server),
+                    "server_features": server_features,
+                },
             )
         )
         state = "started" if self.record["created"] else "resuming"
@@ -221,8 +307,14 @@ class PersistentSession:
             )
             or self.record
             and any(
-                self.record[name] != result[name]
-                for name in ("key", "log_session", "token", "argv_sha256")
+                self.record.get(name) != result.get(name)
+                for name in (
+                    "key",
+                    "log_session",
+                    "token",
+                    "argv_sha256",
+                    "server_features",
+                )
             )
         ):
             raise SSHError(

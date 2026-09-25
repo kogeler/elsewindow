@@ -179,6 +179,8 @@ def build(
         "--add-data",
         f"{root / 'elsewindow/session_bus.py'}{separator}elsewindow",
         "--add-data",
+        f"{root / 'elsewindow/desktop.py'}{separator}elsewindow",
+        "--add-data",
         f"{root / 'elsewindow/log_transport.py'}{separator}elsewindow",
         "--add-data",
         f"{root / 'elsewindow/requirements-xpra.txt'}{separator}elsewindow",

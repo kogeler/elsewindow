@@ -49,6 +49,32 @@ def test_private_buses_are_distinct_foreground_owned_and_selectively_reaped() ->
         second.close()
 
 
+def test_optional_bus_failure_never_falls_back_to_a_desktop_bus(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(session_bus, "DBUS_DAEMON", str(tmp_path / "missing"))
+    bus = session_bus.OwnedSessionBus()
+    warnings: list[str] = []
+    inherited = {
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/unowned/bus",
+        "ELSEWINDOW_SESSION_BUS": "unowned",
+        "LANG": "C.UTF-8",
+    }
+    environment = bus.start_optional(inherited, warnings.append)
+    application_lock = Path(environment.pop("ELSEWINDOW_APPLICATION_LOCK"))
+    assert application_lock.parent.is_dir()
+    assert environment == {
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/dev/null",
+        "LANG": "C.UTF-8",
+    }
+    assert len(warnings) == 1 and "dbus-daemon python3-dbus" in warnings[0]
+    assert bus.process is None
+    assert inherited["ELSEWINDOW_SESSION_BUS"] == "unowned"
+    bus.close()
+    assert not application_lock.parent.exists()
+
+
 def test_bus_cannot_be_started_twice() -> None:
     bus = session_bus.OwnedSessionBus()
     try:

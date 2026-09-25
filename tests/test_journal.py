@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fcntl
 import json
 import os
 import shlex
@@ -16,6 +17,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -316,6 +318,35 @@ def test_journal_loss_does_not_raise_or_repeat_delivery_notice(
     sink.emit(journal.PRIORITIES["warning"], "recovered")
     assert message(receiver)[1] == b"recovered"
     sink.close()
+
+
+def test_optional_journal_start_keeps_terminal_and_remote_publisher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(journal, "JOURNAL_SOCKET", str(tmp_path / "missing"))
+    local = journal.Journal("warning", "client")
+    local.open_optional()
+    local.emit(4, "application can start")
+    output = capsys.readouterr().err
+    assert output.count("journal delivery failed") == 1
+    assert "systemd" in output and "application can start" in output
+    remote = journal.Journal("warning", "server")
+    records: list[bytes] = []
+    assert remote.publisher is not None
+    monkeypatch.setattr(
+        remote.publisher,
+        "emit",
+        lambda _session, _priority, data, **_kw: records.append(data),
+    )
+    remote.open_optional()
+    remote.emit(4, "remote application can start")
+    assert b"systemd" in records[0]
+    assert records[-1] == b"remote application can start"
+    assert capsys.readouterr().err == ""
+    local.close()
+    remote.close()
 
 
 def test_four_origins_are_distinct_in_terminal_and_native_journal(
@@ -688,3 +719,190 @@ logging.warning('graceful cleanup completed')
             child.stdout.close()
         if child.stderr is not None:
             child.stderr.close()
+
+
+def test_remote_group_stop_drains_when_the_ssh_output_pipe_is_full(
+    receiver: socket.socket, tmp_path: Path
+) -> None:
+    """A connected but unread SSH pipe must not hold the lifetime owner alive."""
+    ready = tmp_path / "ready"
+    cleaned = tmp_path / "cleaned"
+    program = r"""
+import logging, os, signal, sys
+from pathlib import Path
+logging.basicConfig(format=os.environ['XPRA_LOG_FORMAT'], level=logging.INFO)
+def stop(*unused):
+    os.write(1, b'cleanup output\n' * 512)
+    Path(sys.argv[2]).touch()
+    logging.warning('graceful cleanup completed under backpressure')
+    os._exit(0)
+signal.signal(signal.SIGTERM, stop)
+Path(sys.argv[1]).touch()
+while True:
+    os.write(1, b'output\n' * 512)
+"""
+    main = (
+        "from elsewindow import journal as j\n"
+        f"j.JOURNAL_SOCKET={receiver.getsockname()!r}\n"
+        "raise SystemExit(j.remote_main(sys.argv[2:]))"
+    )
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            journal.REMOTE_LOADER,
+            journal.remote_source(main),
+            "warning",
+            "a" * 32,
+            base64.b64encode(
+                json.dumps(
+                    [sys.executable, "-c", program, str(ready), str(cleaned)]
+                ).encode()
+            ).decode(),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert child.stdout is not None
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+        # Leave both consumer ends open, unlike the separate broken-pipe test.
+        capacity = fcntl.fcntl(child.stdout, fcntl.F_GETPIPE_SZ)
+        atomic_write = os.fpathconf(child.stdout.fileno(), "PC_PIPE_BUF")
+
+        def pipe_bytes() -> int:
+            return struct.unpack(
+                "I", fcntl.ioctl(child.stdout, termios.FIONREAD, struct.pack("I", 0))
+            )[0]
+
+        # A pipe can reject another atomic write while a partial page is free.
+        # Requiring its nominal byte capacity would itself introduce a race.
+        while pipe_bytes() <= capacity - atomic_write and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pipe_bytes() > capacity - atomic_write
+        os.killpg(child.pid, signal.SIGTERM)
+        assert child.wait(timeout=3) == 0
+        assert cleaned.exists()
+        records = [message(receiver)[1]]
+        while records[-1] != b"graceful cleanup completed under backpressure":
+            records.append(message(receiver)[1])
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+        child.stdout.close()
+        assert child.stderr is not None
+        child.stderr.close()
+
+
+def test_forwarded_output_is_bounded_preserves_order_and_restores_flags(
+    receiver: socket.socket, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flags = {1: True, 2: False}
+    monkeypatch.setattr(journal.os, "get_blocking", flags.__getitem__)
+    monkeypatch.setattr(journal.os, "set_blocking", flags.__setitem__)
+    monkeypatch.setattr(journal, "MAX_QUEUE", 32)
+    blocked = True
+    delivered = {1: bytearray(), 2: bytearray()}
+
+    def write(destination: int, data: bytes) -> int:
+        if blocked:
+            raise BlockingIOError
+        delivered[destination].extend(data[:5])
+        return min(5, len(data))
+
+    monkeypatch.setattr(journal.os, "write", write)
+    sink = journal.Journal("warning", "server")
+    output = journal.ForwardedOutput(sink)
+    assert flags == {1: False, 2: False}
+    output.feed(1, b"0123456789" * 10)
+    output.feed(2, b"stderr")
+    assert len(output.pending[1]) == journal.MAX_QUEUE
+    assert output.dropped == 68
+    blocked = False
+    while any(output.pending.values()):
+        output.flush()
+    output.close()
+    assert flags == {1: True, 2: False}
+    assert delivered == {1: (b"0123456789" * 10)[:32], 2: b"stderr"}
+    assert b"68 bytes" in message(receiver)[1]
+    sink.close()
+
+
+def test_remote_short_command_finishes_forwarding_to_a_delayed_reader(
+    receiver: socket.socket, tmp_path: Path
+) -> None:
+    ready = tmp_path / "ready"
+    program = (
+        "import os,sys\nfrom pathlib import Path\n"
+        f"os.write(1, b'x' * {journal.MAX_QUEUE})\nPath(sys.argv[1]).touch()\n"
+    )
+    main = (
+        "from elsewindow import journal as j\n"
+        f"j.JOURNAL_SOCKET={receiver.getsockname()!r}\n"
+        "raise SystemExit(j.remote_main(sys.argv[2:]))"
+    )
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            journal.REMOTE_LOADER,
+            journal.remote_source(main),
+            "warning",
+            "a" * 32,
+            base64.b64encode(
+                json.dumps([sys.executable, "-c", program, str(ready)]).encode()
+            ).decode(),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+        time.sleep(0.1)
+        stdout, stderr = child.communicate(timeout=3)
+        assert child.returncode == 0
+        assert stdout == b"x" * journal.MAX_QUEUE
+        assert not stderr
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+        assert child.stdout is not None and child.stderr is not None
+        child.stdout.close()
+        child.stderr.close()
+
+
+def test_forwarded_output_disables_a_failed_destination_without_stopping_the_other(
+    receiver: socket.socket, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(journal.os, "get_blocking", lambda _fd: True)
+    monkeypatch.setattr(journal.os, "set_blocking", lambda _fd, _flag: None)
+    delivered = bytearray()
+
+    def write(destination: int, data: bytes) -> int:
+        if destination == 1:
+            raise BrokenPipeError
+        delivered.extend(data)
+        return len(data)
+
+    monkeypatch.setattr(journal.os, "write", write)
+    sink = journal.Journal("warning", "server")
+    output = journal.ForwardedOutput(sink)
+    output.feed(1, b"lost")
+    output.feed(1, b"more lost")
+    output.feed(2, b"available")
+    output.close()
+    assert delivered == b"available"
+    assert b"13 bytes" in message(receiver)[1]
+    sink.close()

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from tools import container_payload
+from tools.runtime_dependency import runtime_version
 
 from .process import (
     CLIENT_HOME,
@@ -301,7 +302,7 @@ def provision_client(
             "import importlib.metadata, importlib.resources, pathlib, elsewindow, ssh_wrapper; "
             "assert pathlib.Path(elsewindow.__file__).is_relative_to(pathlib.Path('/home/box/.local')); "
             "assert importlib.metadata.version('elsewindow') == elsewindow.__version__; "
-            "assert importlib.metadata.version('ssh-wrapper') == '0.1.0'; "
+            f"assert importlib.metadata.version('ssh-wrapper') == {runtime_version()!r}; "
             "assert importlib.resources.files('elsewindow').joinpath('live-cli.yml').read_bytes(); "
             "assert importlib.resources.files('elsewindow').joinpath('profiles.yml').read_bytes()"
         ),

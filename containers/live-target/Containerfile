@@ -30,7 +30,7 @@ COPY --chmod=0600 \
     xpra-release/archive.tar \
     /tmp/xpra-release/
 RUN /usr/bin/python3 /usr/local/libexec/install-release.py \
-    && systemctl mask xpra-server.socket xpra-server.service sshd-unix-local.socket \
+    && systemctl mask xpra.socket xpra.service sshd-unix-local.socket \
     && rm -f /usr/local/libexec/install-release.py
 
 EXPOSE 22

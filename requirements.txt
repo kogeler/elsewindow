@@ -4,7 +4,7 @@
 #
 #    pip-compile --allow-unsafe --generate-hashes --no-emit-find-links --output-file=requirements.txt --strip-extras requirements.in
 #
-ssh-wrapper==0.1.0 \
-    --hash=sha256:0596fce059676285aef609aadebe999d272d4e5140bf469fddedc965df4968f2 \
-    --hash=sha256:520d9bee8b547428c1fae29e7456d5e4f70329357c6f470e71afef500cd3990a
+ssh-wrapper==0.1.1 \
+    --hash=sha256:3791f61e202e86f045d9f5494053b6a948c1fb3eeb520c438be9d114179f22df \
+    --hash=sha256:93874d7c0cf7fed017d0614d622fdbea71f6c3d30594b3ce332b74b3aaa0f2ff
     # via -r requirements.in
