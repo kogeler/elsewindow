@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,24 @@ def test_snapshot_contains_all_exact_lock_graphs(tmp_path: Path) -> None:
         assert resolved[direct]["relationship"] == "direct"
         assert resolved[indirect]["relationship"] == "indirect"
         assert {item["scope"] for item in resolved.values()} == {"development"}
+
+
+def test_submission_workflow_accepts_exactly_the_generated_locks(
+    tmp_path: Path,
+) -> None:
+    """The push-only submission check must track every generated lock manifest."""
+    workflow = (ROOT / ".github/workflows/dependency-submission.yml").read_text(
+        encoding="utf-8"
+    )
+    block = re.search(r"const expected = \[(.*?)\];", workflow, re.DOTALL)
+    assert block is not None
+    expected = re.findall(r'"([^"]+)"', block.group(1))
+    output = tmp_path / "snapshot.json"
+    completed = _run_snapshot(ROOT, output)
+    assert completed.returncode == 0, completed.stderr
+    generated = json.loads(output.read_text(encoding="utf-8"))["manifests"]
+    # JavaScript's default sort orders these ASCII names like Python's sorted().
+    assert expected == sorted(generated) == sorted(LOCKS)
 
 
 def test_snapshot_is_deterministic(tmp_path: Path) -> None:

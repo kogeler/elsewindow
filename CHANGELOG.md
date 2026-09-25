@@ -6,6 +6,13 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- Submit the two Xpra environment locks together with the other six to the
+  GitHub dependency graph. Since 0.2.0 the push-only submission job rejected the
+  generated snapshot; a unit test now keeps its accepted manifest list equal to
+  the generator's output.
+
 ## [0.2.1] - 2026-09-08
 
 ### Added
