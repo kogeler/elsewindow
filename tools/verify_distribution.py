@@ -30,6 +30,7 @@ PACKAGE_FILES = {
     "_persistent_agent.py",
     "cli.py",
     "config.py",
+    "desktop.py",
     "live-cli.yml",
     "live_config.py",
     "journal.py",

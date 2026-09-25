@@ -8,8 +8,13 @@ side/session fields. The local journal and terminal receive all four; the
 server journal receives only remote events. This does not import Xpra internals
 or add a Python dependency.
 The ordinary remote relay stays inside the heartbeat-owned process group.
-It keeps draining to journald after SSH output closes and never duplicates the
-owner's group-wide stop signal. Local terminal output and native journal
+It keeps draining to journald after SSH output closes or stops being consumed,
+and never duplicates the owner's group-wide stop signal. Raw stdout and stderr
+forwarding uses nonblocking writes with separate bounded queues; excess or
+undeliverable bytes are counted and reported without delaying application cleanup.
+Normal command exit has a bounded final output drain for a briefly delayed
+reader; group termination skips that wait.
+Local terminal output and native journal
 output share one filter; neither sink owns application lifetime.
 
 `elsewindow.log_transport` supplies a bounded live subscription over channels
@@ -30,7 +35,7 @@ that cannot publish to this transport.
 
 The project has five runtime layers:
 
-1. `elsewindow.cli` validates public authority, application, profile,
+1. `elsewindow.cli` validates public authority, application, environment, profile,
    clipboard, and timeout inputs.
 2. `elsewindow.live_config` strictly parses the packaged reviewed YAML and
    exposes its server and client profile blocks.
@@ -38,7 +43,7 @@ The project has five runtime layers:
    clipboard and security policy with those blocks, then coordinates local and
    remote Xpra processes.
 4. the published
-   [`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/0.1.0/) package owns the
+   [`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/) package owns the
    OpenSSH master, mux-only commands, environment recovery, bounded diagnostic
    tails, and heartbeat-supervised remote process group.
 5. `elsewindow.persistent` uses that same mux to control the standard-library
@@ -106,6 +111,27 @@ owns a private foreground notification bus for each ordinary or persistent
 remote session. The journal relay and persistent worker reuse it without
 wrapping or changing the recorded Xpra PID or command fingerprint.
 
+The application-side desktop helper starts the distribution portal, GTK backend,
+and a transient permission store after Xpra supplies its display environment.
+These foreground processes share the owned remote process group or cgroup. Their
+absence or startup failure disables portal functionality with package guidance;
+the helper still starts the application and preserves its arguments and exit
+status. No desktop helper adopts another session's bus or installs packages.
+The remote owner also supplies a private one-use application lock. Repeated or
+concurrent child-start requests launch neither a second application nor a second
+portal owner. This scope remains available without D-Bus and is removed with
+the ordinary process group or persistent worker's other owned resources.
+Only portal helper processes have bounded CPU affinity and native worker pools;
+icon loaders cannot consume one worker per host CPU under a user-service task
+limit. The application and Xpra retain their original affinity.
+
+Application environment overrides share the child's bounded JSON launch payload.
+The CLI captures explicitly named local values before connecting and normalizes
+assignment order. The isolated desktop helper validates the overrides again and
+passes them only to the application's `Popen` environment after starting desktop
+services. Display, runtime-directory, D-Bus, and Elsewindow control variables are
+reserved; the remote helper and Xpra keep their original environment.
+
 The package treats Xpra as a release-backed external application. It validates
 only public command surfaces and observes real process, window, picture, and
 lifecycle outcomes; it does not import Xpra internals to reproduce codec,
@@ -116,6 +142,7 @@ to the maintained fork and its live matrices.
 
 The remote agent resolves the executable against the remote login environment,
 converts its invocation path to an absolute path, and hashes a JSON argv array.
+An explicit application `PATH` overrides the login search path for this lookup.
 Executable symlinks are not dereferenced: doing so would change virtualenv or
 multicall-binary behavior and keys when versioned application links change.
 Argument boundaries and
@@ -124,6 +151,13 @@ record and transient unit; a fresh random token distinguishes successive
 instances with identical argv. Encoding and clipboard policies are not part of
 the key, but their complete server command must match before resumption.
 The network profile affects only the new local client.
+The explicit application environment is recorded separately from the supervisor's
+login environment. Resumption requires an identical override mapping, independent
+of assignment order, and never modifies an already running application's
+environment. The values do not enter public identity replies or mismatch messages.
+The control request carries application argv and overrides once, with child
+placeholders in the server templates; the remote agent rebuilds the canonical
+child command before recording or comparing it.
 
 Under the lock, the agent either verifies an existing service or writes an
 atomic record and submits `systemd-run --user`. The service supervisor is

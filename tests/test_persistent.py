@@ -24,7 +24,12 @@ from ssh_wrapper.errors import SSHError
 
 from elsewindow import _persistent_agent as agent
 from elsewindow import persistent
-from elsewindow.config import DEFAULT_CLIPBOARD_POLICY
+from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, MAX_APPLICATION_BYTES
+from elsewindow.desktop import (
+    MAX_APPLICATION_ENVIRONMENT_BYTES,
+    SYSTEM_PYTHON,
+    application_argv,
+)
 from elsewindow.journal import remote_source
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE
 from elsewindow.session import build_server_argv
@@ -87,10 +92,11 @@ def test_creation_uses_owned_cgroup_and_lossless_child_argv(
         if arg.startswith("--start-child=")
     )
     argv = shlex.split(child)
-    assert argv[:3] == [sys.executable, "-c", agent.APP_LOADER]
-    assert json.loads(base64.b64decode(argv[-1])) == agent.canonical_application(
-        payload["application"]
-    )
+    assert argv[:4] == [SYSTEM_PYTHON, "-I", "-c", agent.APP_LOADER]
+    assert json.loads(base64.b64decode(argv[-2])) == {
+        "argv": agent.canonical_application(payload["application"]),
+        "environment": {},
+    }
     command = commands[0]
     for option in (
         "--user",
@@ -139,12 +145,72 @@ def test_identity_preserves_argument_boundaries_and_executable_symlinks(
     assert agent.digest([sys.executable, ""]) != agent.digest([sys.executable])
 
 
+def test_explicit_application_path_controls_remote_executable_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application = tmp_path / "environment-fixture"
+    application.symlink_to(sys.executable)
+    monkeypatch.setenv("PATH", "/missing")
+    assert agent.canonical_application(
+        [application.name, "argument"], {"PATH": str(tmp_path)}
+    ) == [str(application), "argument"]
+    with pytest.raises(agent.AgentError, match="not found"):
+        agent.canonical_application([application.name])
+
+
+def test_persistent_environment_is_applied_and_must_match_on_resume(
+    registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def run(*argv: str) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(agent, "run", run)
+    payload = request(
+        "-c",
+        "import json,os;print(json.dumps({k:os.environ[k] for k in ('APP_MODE','EMPTY')}))",
+    )
+    values = {"APP_MODE": "literal $HOME; value=one\nnext", "EMPTY": ""}
+    payload["application_environment"] = values
+    created = agent.ensure(payload, "source")
+    record = agent.read_record(registry, created["key"])
+    assert record is not None
+    assert record["application_environment"] == values
+    assert "APP_MODE" not in record["environment"]
+    assert "application_environment" not in created
+    child = next(
+        arg.partition("=")[2]
+        for arg in record["server"]
+        if arg.startswith("--start-child=")
+    )
+    result = subprocess.run(
+        shlex.split(child), capture_output=True, timeout=10, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == values
+
+    state = {"ActiveState": "active", "Description": agent.description(record)}
+    monkeypatch.setattr(agent, "unit_state", lambda _key: state)
+    reordered = dict(reversed(tuple(values.items())))
+    assert agent.ensure(
+        payload | {"application_environment": reordered}, "source"
+    ) == created | {"created": False}
+    for changed in ({}, values | {"APP_MODE": "changed"}):
+        with pytest.raises(agent.AgentError) as raised:
+            agent.ensure(payload | {"application_environment": changed}, "source")
+        assert raised.value.code == "persistent_environment_mismatch"
+    assert len(commands) == 1
+    assert agent.read_record(registry, created["key"]) == record
+
+
 def test_child_launcher_preserves_the_selected_virtual_environment() -> None:
     application = agent.canonical_application(
         [sys.executable, "-c", "import sys;print(sys.prefix)"]
     )
     completed = subprocess.run(
-        [sys.executable, "-c", agent.APP_LOADER, agent.encode(application)],
+        application_argv(tuple(application)),
         capture_output=True,
         text=True,
         check=False,
@@ -208,6 +274,53 @@ def test_reuse_mismatch_stale_and_foreign_unit(
     restarted = agent.ensure(payload, "source")
     assert restarted["key"] == created["key"]
     assert restarted["token"] != created["token"]
+
+
+def test_resume_retains_effective_features_when_prerequisites_change(
+    registry: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent, "run", lambda *args: subprocess.CompletedProcess(args, 0, "", "")
+    )
+    payload = request("-c", "pass")
+    requested_server = payload["server"]
+    original_features = {
+        "notifications": False,
+        "encoding_profile": DEFAULT_ENCODING_PROFILE,
+    }
+    payload.update(
+        requested_server=requested_server,
+        server=[
+            arg.replace("--notifications=yes", "--notifications=no")
+            for arg in requested_server
+        ],
+        server_features=original_features,
+    )
+    created = agent.ensure(payload, "source")
+    record = agent.read_record(registry, created["key"])
+    assert record is not None
+    monkeypatch.setattr(
+        agent,
+        "unit_state",
+        lambda _key: {
+            "ActiveState": "active",
+            "Description": agent.description(record),
+        },
+    )
+    repaired = payload | {
+        "server": requested_server,
+        "server_features": original_features | {"notifications": True},
+    }
+    resumed = agent.ensure(repaired, "source")
+    assert resumed == created | {"created": False}
+    assert resumed["server_features"] == original_features
+    with pytest.raises(agent.AgentError, match="different server"):
+        agent.ensure(
+            repaired
+            | {"requested_server": [*requested_server, "--new-project-policy=value"]},
+            "source",
+        )
 
 
 def test_simultaneous_creators_submit_exactly_one_service(
@@ -360,6 +473,9 @@ def test_controller_rechecks_linger_and_never_emits_stop(
 
     async def mux(command: str, _timeout: float) -> tuple[int, bytes, bytes]:
         action = shlex.split(command)[-2]
+        payload = json.loads(base64.b64decode(shlex.split(command)[-1]))
+        if "application" in payload:
+            assert payload["application_environment"] == {"APP_MODE": "explicit"}
         calls.append(action)
         result = (
             {"linger": "enable-linger" in calls, "manager": True}
@@ -379,7 +495,9 @@ def test_controller_rechecks_linger_and_never_emits_stop(
     monkeypatch.setattr(persistent, "confirm_linger", confirm)
 
     async def scenario() -> None:
-        controller = persistent.PersistentSession(mux, interactive, 0.01)
+        controller = persistent.PersistentSession(
+            mux, interactive, 0.01, application_environment=(("APP_MODE", "explicit"),)
+        )
         session = await controller.identify(("application",))
         assert session == record["log_session"]
         controller.journal.flush(session)
@@ -396,6 +514,65 @@ def test_controller_rechecks_linger_and_never_emits_stop(
         "ensure",
         "status",
     ]
+
+
+@pytest.mark.asyncio
+async def test_large_launch_payload_is_sent_once_and_rebuilt_remotely(
+    registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    application = (
+        sys.executable,
+        "\n" * (MAX_APPLICATION_BYTES - len(sys.executable.encode())),
+    )
+    name = "APP_VALUE"
+    values = ((name, "\n" * (MAX_APPLICATION_ENVIRONMENT_BYTES - len(name) - 2)),)
+    server = build_server_argv(
+        application,
+        "fixture",
+        DEFAULT_ENCODING_PROFILE,
+        DEFAULT_CLIPBOARD_POLICY,
+        persistent=True,
+        application_environment=values,
+    )
+    monkeypatch.setattr(
+        agent, "run", lambda *argv: subprocess.CompletedProcess(argv, 0, "", "")
+    )
+
+    async def mux(command: str, _timeout: float) -> tuple[int, bytes, bytes]:
+        # SSH and the remote shell must each be able to pass this as one argument.
+        process = await asyncio.create_subprocess_exec("/usr/bin/true", command)
+        assert await asyncio.wait_for(process.wait(), 5) == 0
+        source, action, encoded = shlex.split(command)[-3:]
+        assert action == "ensure"
+        payload = json.loads(base64.b64decode(encoded))
+        for field in ("server", "requested_server"):
+            assert "--start-child=" in payload[field]
+        result = agent.ensure(payload, source)
+        return 0, json.dumps(result).encode(), b""
+
+    async def interactive(_command: str) -> None:
+        raise AssertionError("unexpected interactive command")
+
+    controller = persistent.PersistentSession(
+        mux, interactive, 0.01, application_environment=values
+    )
+    controller._prepared = True
+    controller.journal.flush(agent.log_session(agent.digest(list(application))))
+    try:
+        await controller.start(application, server, requested_server=server)
+        record = agent.read_record(registry, controller.record["key"])
+        assert record is not None
+        child = next(
+            arg.partition("=")[2]
+            for arg in record["server"]
+            if arg.startswith("--start-child=")
+        )
+        assert json.loads(base64.b64decode(shlex.split(child)[-2])) == {
+            "argv": list(application),
+            "environment": dict(values),
+        }
+    finally:
+        controller.journal.close()
 
 
 @pytest.mark.parametrize("exit_code", [0, 23, None])
@@ -415,7 +592,7 @@ def test_supervisor_reaps_notification_bus_and_cleans_after_exit_or_bus_failure(
             "-c",
             (
                 "import os,sys,time;from pathlib import Path;"
-                "Path('bus-pid').write_text(os.environ['DBUS_SESSION_BUS_PID']);"
+                "Path('bus-pid').write_text(os.environ.get('DBUS_SESSION_BUS_PID','0'));"
                 f"print('wayland-4',flush=True);time.sleep(0.1);sys.exit({exit_code})"
             ),
         ],
@@ -440,25 +617,20 @@ def test_supervisor_reaps_notification_bus_and_cleans_after_exit_or_bus_failure(
         for selected in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
     }
     try:
-        if exit_code is None:
-            with pytest.raises(agent.AgentError) as caught:
-                agent.serve({"key": key, "token": token})
-            assert caught.value.code == "notification_bus_unavailable"
-        else:
-            agent.serve({"key": key, "token": token})
+        agent.serve({"key": key, "token": token})
     finally:
         for selected, handler in signals.items():
             signal.signal(selected, handler)
     assert agent.read_record(registry, key) is None
-    if exit_code is None:
-        assert not writes
-        assert not (registry / "bus-pid").exists()
-        return
     assert writes[-1]["display"] == "wayland-4"
     assert writes[-1]["worker_start"] == agent.process_start(os.getpid())
     assert writes[-1]["invocation"] == "c" * 32
     assert agent.process_start(writes[-1]["xpra_pid"]) == ""
-    assert agent.process_start(int((registry / "bus-pid").read_text())) == ""
+    bus_pid = int((registry / "bus-pid").read_text())
+    if exit_code is None:
+        assert bus_pid == 0
+    else:
+        assert bus_pid > 0 and agent.process_start(bus_pid) == ""
 
 
 def test_linger_queries_and_activation_are_uid_scoped(
@@ -571,3 +743,67 @@ def test_probe_fails_closed_without_systemd(
         agent.linger_enabled()
     with pytest.raises(agent.AgentError, match="cannot inspect"):
         agent.unit_state("a" * 64)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", (False, True))
+async def test_missing_persistence_only_falls_back_without_recorded_state(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], recorded: bool
+) -> None:
+    async def mux(_command: str, _timeout: float) -> tuple[int, bytes, bytes]:
+        pytest.fail("unexpected SSH command")
+
+    async def interactive(_command: str) -> None:
+        pytest.fail("missing prerequisites never grant consent")
+
+    controller = persistent.PersistentSession(
+        mux, interactive, 1, application_environment=(("PATH", "/application-bin"),)
+    )
+    calls = []
+
+    async def call(action: str, request: dict[str, Any]) -> dict[str, Any]:
+        calls.append(action)
+        if action == "probe":
+            raise SSHError("persistent_systemd_unavailable", "missing")
+        assert action == "ordinary-fallback" and request["application"] == [
+            "application"
+        ]
+        assert request["application_environment"] == {"PATH": "/application-bin"}
+        return {"allowed": not recorded}
+
+    monkeypatch.setattr(controller, "call", call)
+    try:
+        if recorded:
+            with pytest.raises(SSHError, match="missing"):
+                await controller.prepare(("application",))
+        else:
+            assert await controller.prepare(("application",)) is False
+        assert calls == ["probe", "ordinary-fallback"]
+        output = capsys.readouterr().err
+        assert ("no duplicate" if recorded else "systemd libpam-systemd") in output
+        if not recorded:
+            assert "disconnecting the client or SSH will stop" in output
+    finally:
+        controller.journal.close()
+
+
+def test_ordinary_fallback_checks_current_secure_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "elsewindow-persistent"
+    root.mkdir(mode=0o700)
+    original = agent.secure_directory
+    monkeypatch.setattr(
+        agent,
+        "secure_directory",
+        lambda path: original(root if path.name == root.name else tmp_path),
+    )
+    application = [sys.executable, "-c", "pass"]
+    payload = {"application": application}
+    key = agent.digest(agent.canonical_application(application))
+    assert agent.ordinary_fallback(payload) == {"allowed": True}
+    agent.write_record(root, {"schema": agent.SCHEMA, "key": key, "token": "a" * 32})
+    assert agent.ordinary_fallback(payload) == {"allowed": False}
+    (root / f"{key}.json").chmod(0o644)
+    with pytest.raises(agent.AgentError, match="unsafe"):
+        agent.ordinary_fallback(payload)

@@ -731,9 +731,9 @@ sortedcontainers==2.4.0 \
     --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
     --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
     # via cyclonedx-python-lib
-ssh-wrapper==0.1.0 \
-    --hash=sha256:0596fce059676285aef609aadebe999d272d4e5140bf469fddedc965df4968f2 \
-    --hash=sha256:520d9bee8b547428c1fae29e7456d5e4f70329357c6f470e71afef500cd3990a
+ssh-wrapper==0.1.1 \
+    --hash=sha256:3791f61e202e86f045d9f5494053b6a948c1fb3eeb520c438be9d114179f22df \
+    --hash=sha256:93874d7c0cf7fed017d0614d622fdbea71f6c3d30594b3ce332b74b3aaa0f2ff
     # via -r requirements.in
 stevedore==5.9.1 \
     --hash=sha256:5c8ff3a9f336cc1a06ac0f597bc79d11a2f950bfd32e290ca56b5a301fafafbf \

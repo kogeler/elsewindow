@@ -14,7 +14,17 @@ from elsewindow.session import build_server_argv
 from .process import LiveFailure, LiveResources, checked, podman_exec, run_process
 
 OWNED_TITLE = "Elsewindow Live Test"
-REMOTE_APP = "/home/xpra-test/elsewindow-live-app"
+APPLICATION_ENVIRONMENT = (
+    ("EW_LIVE_EMPTY", ""),
+    ("EW_LIVE_VALUE", "one two = '$HOME'; literal\nsecond line \u2603"),
+)
+FIXTURE_HOME = "/home/xpra-test"
+FIXTURE_DIRECTORY = ".local/elsewindow-live"
+REMOTE_APP = f"{FIXTURE_HOME}/{FIXTURE_DIRECTORY}/app"
+AGENT_CASE = "agent-notification"
+# Relative to the remote home, like an operator's `.local/<app>/...` command.
+AGENT_PROBE = f"{FIXTURE_DIRECTORY}/agent-probe"
+AGENT_MARKER = "/tmp/elsewindow-live-agent"
 OWNED_MARKER = "/tmp/elsewindow-live-owned"
 ABRUPT_MARKER = "/tmp/elsewindow-live-abrupt"
 PERSISTENT_MARKER = "/tmp/elsewindow-live-persistent"
@@ -22,7 +32,11 @@ PERSISTENT_DISCONNECTS = ("detach", "client-kill", "master-close", "abrupt", "ca
 PERSISTENT_CONNECTIONS = len(PERSISTENT_DISCONNECTS) + 2
 UNRELATED_PROCESS_MARKER = "/tmp/elsewindow-live-unrelated-process"
 
-REMOTE_APP_SOURCE = Path(__file__).with_name("gui_app.py").read_bytes()
+FIXTURE_SOURCES = {
+    "app": "gui_app.py",
+    "agent-probe": "agent_probe.py",
+    "remote_fixture.py": "remote_fixture.py",
+}
 
 
 def _target_user_argv(target: str, *arguments: str) -> list[str]:
@@ -44,6 +58,7 @@ def _target_user(
     target: str,
     *arguments: str,
     purpose: str,
+    input_data: bytes | None = None,
 ) -> bytes:
     return podman_exec(
         resources,
@@ -53,9 +68,10 @@ def _target_user(
         "xpra-test",
         "--",
         "env",
-        "HOME=/home/xpra-test",
+        f"HOME={FIXTURE_HOME}",
         *arguments,
         purpose=purpose,
+        input_data=input_data,
     )
 
 
@@ -153,16 +169,30 @@ done
 
 
 def install_xpra_fixture(resources: LiveResources, target: str) -> None:
-    podman_exec(
+    directory = f"{FIXTURE_HOME}/{FIXTURE_DIRECTORY}"
+    _target_user(
         resources,
         target,
-        "bash",
-        "-ceu",
-        f'cat > "{REMOTE_APP}"; '
-        f'chown xpra-test:xpra-test "{REMOTE_APP}"; chmod 0700 "{REMOTE_APP}"',
-        purpose="installing the Xpra live application",
-        input_data=REMOTE_APP_SOURCE,
+        "install",
+        "-d",
+        "-m",
+        "0700",
+        directory,
+        purpose="creating the Xpra live fixture directory",
     )
+    # Every fixture imports the shared helpers from its own directory.
+    for name, source in FIXTURE_SOURCES.items():
+        _target_user(
+            resources,
+            target,
+            "sh",
+            "-ceu",
+            'umask 077; cat > "$1"; chmod 0700 "$1"',
+            "elsewindow-live-fixture",
+            f"{directory}/{name}",
+            purpose=f"installing the Xpra live fixture {name}",
+            input_data=Path(__file__).with_name(source).read_bytes(),
+        )
     podman_exec(
         resources,
         target,

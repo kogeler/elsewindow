@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import select
 import selectors
 import signal
 import socket
@@ -21,6 +22,7 @@ import zlib
 from importlib.resources import files
 from typing import Any
 
+from .desktop import FEATURE_PREFIX
 from .log_transport import MAX_MESSAGE, MAX_QUEUE, SESSION, Publisher
 from .session_bus import OwnedSessionBus, SessionBusError
 
@@ -37,15 +39,15 @@ REMOTE_LOADER = (
     "import base64,json,sys,types,zlib;"
     "d=json.loads(zlib.decompress(base64.b64decode(sys.argv[1])));"
     "p=types.ModuleType('elsewindow');p.__path__=[];sys.modules[p.__name__]=p;"
-    "\nfor n in ('session_bus','log_transport','journal'):\n"
-    " m=types.ModuleType('elsewindow.'+n);sys.modules[m.__name__]=m;"
+    "\nfor n in ('desktop','session_bus','log_transport','journal'):\n"
+    " m=types.ModuleType('elsewindow.'+n);m.__source__=d[n];sys.modules[m.__name__]=m;"
     "exec(compile(d[n],'<elsewindow-'+n+'>','exec'),m.__dict__)\n"
     "exec(compile(d['main'],'<elsewindow-agent>','exec'))"
 )
 
 
 class JournalError(RuntimeError):
-    """A required local journal is unavailable, without exposing private paths."""
+    """A native journal is unavailable, without exposing private paths."""
 
 
 def source_label(side: str, xpra: bool = False) -> str:
@@ -155,6 +157,28 @@ class Journal:
             self.socket.close()
             self.socket = None
 
+    def open_optional(self) -> None:
+        """Keep terminal output and the owned relay usable without journald."""
+        try:
+            self.open()
+        except (OSError, JournalError):
+            self._delivery_failed()
+
+    def _delivery_failed(self) -> None:
+        if self.socket is not None:
+            self.socket.close()
+            self.socket = None
+        if self.failed:
+            return
+        self.failed = True
+        side = "local" if self.side == "client" else "remote"
+        self.emit(
+            PRIORITIES["warning"],
+            f"{side} journal delivery failed; native journal recording is currently "
+            f"unavailable. On the {side} host, install the systemd package and "
+            "enable systemd-journald. Terminal logging and session lifetime are unchanged.",
+        )
+
     def emit(
         self,
         priority: int,
@@ -231,18 +255,7 @@ class Journal:
             self.socket.send(packet)
             self.failed = False
         except (OSError, JournalError):
-            self.close()
-            if not self.failed and self.side == "client":
-                self.failed = True
-                try:
-                    print(
-                        f"elsewindow-local: [session={session}] local journal delivery failed; session lifecycle is unchanged",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                except (OSError, ValueError):
-                    pass
-            self.failed = True
+            self._delivery_failed()
 
 
 class XpraLogStream:
@@ -265,6 +278,15 @@ class XpraLogStream:
             self.line(line)
 
     def line(self, line: bytes) -> None:
+        marker = FEATURE_PREFIX.encode()
+        if line.startswith(marker):
+            self.journal.emit(
+                PRIORITIES["warning"],
+                line[len(marker) :],
+                category="prerequisites",
+                pid=self.pid,
+            )
+            return
         match = LOG_HEADER.match(line)
         if match:
             level, category, line = match.groups()
@@ -282,9 +304,89 @@ class XpraLogStream:
             self.pending = b""
 
 
+class ForwardedOutput:
+    """Bound SSH output without letting an unread channel block the owner."""
+
+    def __init__(self, journal: Journal) -> None:
+        self.journal = journal
+        self.pending: dict[int, bytearray] = {}
+        self.blocking: dict[int, bool] = {}
+        self.dropped = 0
+        # Read both flags before changing either: stdout and stderr can share
+        # an open file description. Restore the inherited flags when finished.
+        for destination in (1, 2):
+            try:
+                self.blocking[destination] = os.get_blocking(destination)
+            except OSError:
+                continue
+        for destination in self.blocking:
+            try:
+                os.set_blocking(destination, False)
+            except OSError:
+                continue
+            self.pending[destination] = bytearray()
+
+    def feed(self, destination: int, data: bytes) -> None:
+        self.flush()
+        pending = self.pending.get(destination)
+        if pending is None:
+            self.dropped += len(data)
+            return
+        available = MAX_QUEUE - len(pending)
+        pending.extend(data[:available])
+        self.dropped += max(0, len(data) - available)
+        self.flush()
+
+    def flush(self) -> None:
+        for destination, pending in tuple(self.pending.items()):
+            if not pending:
+                continue
+            try:
+                written = os.write(destination, pending)
+            except BlockingIOError:
+                continue
+            except OSError:
+                # Output loss is independent of application lifetime. Native
+                # journaling and the separate bounded log observers continue.
+                self.dropped += len(pending)
+                del self.pending[destination]
+            else:
+                del pending[:written]
+
+    def close(self, *, drain_timeout: float = 0) -> None:
+        deadline = time.monotonic() + drain_timeout
+        while True:
+            self.flush()
+            destinations = tuple(
+                destination for destination, pending in self.pending.items() if pending
+            )
+            remaining = deadline - time.monotonic()
+            if not destinations or remaining <= 0:
+                break
+            try:
+                select.select((), destinations, (), remaining)
+            except OSError:
+                break
+        self.dropped += sum(len(pending) for pending in self.pending.values())
+        self.pending.clear()
+        for destination, blocking in self.blocking.items():
+            try:
+                os.set_blocking(destination, blocking)
+            except OSError:
+                pass
+        if self.dropped:
+            self.journal.emit(
+                PRIORITIES["warning"],
+                f"SSH output unavailable or backpressured; {self.dropped} bytes "
+                "of raw output were not forwarded. Native journal processing "
+                "and application cleanup continued.",
+            )
+
+
 def remote_source(main: str) -> str:
     """Package owned source as data, with no remote Elsewindow installation."""
     payload = {
+        "desktop": files("elsewindow").joinpath("desktop.py").read_text(),
         "session_bus": files("elsewindow").joinpath("session_bus.py").read_text(),
         "journal": files("elsewindow").joinpath("journal.py").read_text(),
         "log_transport": files("elsewindow").joinpath("log_transport.py").read_text(),
@@ -316,7 +418,7 @@ def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
     journal = Journal(level, "server", session)
     child: subprocess.Popen[bytes] | None = None
     stopping_at: float | None = None
-    forwarding = {1: True, 2: True}
+    forwarding = ForwardedOutput(journal)
     streams: list[XpraLogStream] = []
     bus = OwnedSessionBus()
 
@@ -329,11 +431,14 @@ def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
     for selected in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         signal.signal(selected, stop)
     try:
-        journal.open()
+        journal.open_optional()
         argv = json.loads(base64.b64decode(encoded))
         environment = xpra_environment(level)
         if with_session_bus:
-            environment = bus.start(environment)
+            environment = bus.start_optional(
+                environment,
+                lambda message: journal.emit(PRIORITIES["warning"], message),
+            )
         child = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
@@ -354,18 +459,13 @@ def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
                     log,
                 )
             while selector.get_map():
+                forwarding.flush()
                 for event, _mask in selector.select(timeout=0.2):
                     data = os.read(event.fd, 4096)
                     if data:
                         event.data.feed(data)
                         destination = 2 if event.fileobj is child.stderr else 1
-                        if forwarding[destination]:
-                            try:
-                                os.write(destination, data)
-                            except BrokenPipeError:
-                                # Keep draining to this host's journal. The
-                                # heartbeat owner, not an output pipe, owns exit.
-                                forwarding[destination] = False
+                        forwarding.feed(destination, data)
                     else:
                         event.data.finish()
                         selector.unregister(event.fileobj)
@@ -388,7 +488,7 @@ def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
             else "remote Xpra journal relay failed"
         )
         journal.emit(PRIORITIES["error"], message)
-        print(f"elsewindow: {message}", file=sys.stderr)
+        forwarding.feed(2, f"elsewindow: {message}\n".encode())
         return 1
     finally:
         if child is not None:
@@ -405,4 +505,7 @@ def remote_main(arguments: list[str], *, with_session_bus: bool = False) -> int:
         bus.close()
         for log_stream in streams:
             log_stream.finish()
+        # Short command responses must survive a briefly delayed SSH reader.
+        # Group termination, unlike an ordinary command exit, never waits for it.
+        forwarding.close(drain_timeout=1 if stopping_at is None else 0)
         journal.close()

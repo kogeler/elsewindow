@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import shutil
 import signal
+import subprocess
 import sys
 from collections.abc import Sequence
 from contextlib import suppress
@@ -36,7 +37,15 @@ from .config import (
     SUPPORTED_NETWORK_PROFILES,
     XpraConfig,
 )
-from .journal import DEFAULT_LOG_LEVEL, LOG_LEVELS, PRIORITIES, Journal
+from .desktop import NOTIFICATION_PACKAGES, probe_argv, probe_result
+from .journal import (
+    DEFAULT_LOG_LEVEL,
+    LOG_LEVELS,
+    PRIORITIES,
+    Journal,
+    JournalError,
+    xpra_environment,
+)
 from .session import ReportedSSHError, XpraSession
 from .xpra_runtime import XpraRuntimeError, prepare, prepared_launcher
 
@@ -67,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user", help="remote user required with --host")
     parser.add_argument("--port", type=int, default=22, help="direct SSH port")
     parser.add_argument(
+        "--env",
+        action="append",
+        metavar="NAME[=VALUE]",
+        help="set an application variable, or copy a named local variable; repeat for multiple variables",
+    )
+    parser.add_argument(
         "--encoding-profile",
         choices=SUPPORTED_ENCODING_PROFILES,
         default=DEFAULT_ENCODING_PROFILE,
@@ -90,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--persistent",
         action="store_true",
-        help="keep the remote application after disconnect and resume by its argv",
+        help="request persistence and resume by argv; warn and use ordinary lifetime if unavailable",
     )
     parser.add_argument(
         "--log-level",
@@ -136,6 +151,7 @@ def _diagnose() -> int:
         ("_persistent_agent.py", files("elsewindow").joinpath("_persistent_agent.py")),
         ("journal.py", files("elsewindow").joinpath("journal.py")),
         ("session_bus.py", files("elsewindow").joinpath("session_bus.py")),
+        ("desktop.py", files("elsewindow").joinpath("desktop.py")),
         ("log_transport.py", files("elsewindow").joinpath("log_transport.py")),
         (
             "requirements-xpra.txt",
@@ -185,7 +201,56 @@ def _diagnose() -> int:
                     failed = True
                 else:
                     print("xpra-environment: verified")
+    if not failed:
+        _diagnose_optional()
     return int(failed)
+
+
+def _diagnose_optional() -> None:
+    try:
+        result = subprocess.run(
+            probe_argv("client"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            env=xpra_environment(DEFAULT_LOG_LEVEL),
+            timeout=15,
+            check=False,
+        )
+        capabilities = probe_result(result.returncode, result.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        capabilities = {"notifications": False, "render": False}
+    for feature, available in capabilities.items():
+        print(
+            f"optional-local-{feature}: {'available' if available else 'unavailable'}"
+        )
+    if not capabilities["notifications"]:
+        print(
+            "elsewindow: warning: local notification delivery is unavailable. "
+            f"On Debian/Ubuntu, install {NOTIFICATION_PACKAGES} and run a desktop "
+            "notification service (for example dunst). Sessions continue without delivery.",
+            file=sys.stderr,
+        )
+    if not capabilities["render"]:
+        print(
+            "elsewindow: warning: no accessible local DRM render device; H.264 "
+            "connections fall back to RGB. Check GPU permissions and the system "
+            "VA-API driver. Ordinary RGB sessions remain available.",
+            file=sys.stderr,
+        )
+    journal = Journal(DEFAULT_LOG_LEVEL, "client")
+    try:
+        journal.open()
+    except (OSError, JournalError):
+        print(
+            "elsewindow: warning: local journald is unavailable. Install systemd "
+            "and enable systemd-journald; terminal logging remains available.",
+            file=sys.stderr,
+        )
+    finally:
+        journal.close()
+    print(
+        "optional-remote-features: checked after SSH authentication and display startup"
+    )
 
 
 async def _run_with_signals(config: XpraConfig) -> int:
@@ -234,9 +299,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             or args.user is not None
             or args.port != 22
             or args.application
+            or args.env
         ):
             parser.error(
-                "setup and diagnosis cannot be combined with a session authority"
+                "setup and diagnosis cannot be combined with session or application inputs"
             )
         if args.diagnose:
             return _diagnose()
