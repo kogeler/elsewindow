@@ -52,6 +52,8 @@ jobs:
               throw new Error("Dependency snapshot has an invalid top-level shape");
             }
             const expected = [
+              "elsewindow/requirements-xpra-build.txt",
+              "elsewindow/requirements-xpra.txt",
               "requirements-docs.txt",
               "requirements-package.txt",
               "requirements-quality.txt",
