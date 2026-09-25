@@ -21,6 +21,7 @@ from .process import (
     CLIENT_XPRA_VENV,
     LIVE_DRIVER,
     LIVE_EVIDENCE_PREFIX,
+    TARGET_ALIAS,
     LiveFailure,
     LiveResources,
     checked,
@@ -29,6 +30,8 @@ from .process import (
 )
 from .xpra_target import (
     ABRUPT_MARKER,
+    AGENT_CASE,
+    AGENT_MARKER,
     OWNED_MARKER,
     PERSISTENT_CONNECTIONS,
     PERSISTENT_MARKER,
@@ -41,6 +44,15 @@ from .xpra_target import (
     verify_unrelated,
 )
 
+LINGER_CASES = ("linger-declined", "linger")
+LIFECYCLE_CASES = (
+    ("detach", OWNED_MARKER),
+    ("abrupt", ABRUPT_MARKER),
+    ("persistent", PERSISTENT_MARKER),
+    (AGENT_CASE, AGENT_MARKER),
+)
+ABRUPT_REPETITIONS = 4
+LIVE_CASES = (*LINGER_CASES, *(case for case, _marker in LIFECYCLE_CASES))
 CLIENT_DISPLAY = ":99"
 CLIENT_RUNTIME = "/tmp/elsewindow-client-runtime"
 WAIT_TIMEOUT = 60.0
@@ -210,6 +222,23 @@ def run_driver(resources: LiveResources, client: str, case: str) -> dict[str, ob
     )
     if completed.returncode != 0:
         for stream in (completed.stdout, completed.stderr):
+            diagnostic = "\n".join(
+                line[:180] + (" ... " + line[-80:] if len(line) > 180 else "")
+                for line in stream.splitlines()
+                if any(
+                    word in line.lower()
+                    for word in (
+                        "portal",
+                        "permission",
+                        "started command",
+                        "warning",
+                        "failed",
+                        "traceback",
+                    )
+                )
+            )[-16384:]
+            if diagnostic:
+                print(diagnostic, file=sys.stderr)
             notifications = "\n".join(
                 line for line in stream.splitlines() if "notif" in line.lower()
             )[-8192:]
@@ -253,7 +282,11 @@ def run_authenticated_driver(
     evidence = run_driver(resources, client, case)
     after = target_log(resources, target).count("Accepted publickey for xpra-test")
     expected = (
-        PERSISTENT_CONNECTIONS if case == "persistent" else 2 if case == "detach" else 1
+        PERSISTENT_CONNECTIONS
+        if case == "persistent"
+        else 2
+        if case in {"detach", AGENT_CASE}
+        else 1
     )
     if after != before + expected:
         raise LiveFailure(
@@ -278,16 +311,62 @@ def verify_case_cleanup(
     ):
         raise LiveFailure("the Xpra display evidence is invalid")
     for display in set(displays):
-        wait_until(
-            f"owned Xpra cleanup on {display}",
-            lambda display=display: owned_state_absent(
-                resources, target, display, marker
-            ),
-        )
+        try:
+            wait_until(
+                f"owned Xpra cleanup on {display}",
+                lambda display=display: owned_state_absent(
+                    resources, target, display, marker
+                ),
+            )
+        except LiveFailure as error:
+            details = run_process(
+                [
+                    resources.podman,
+                    "exec",
+                    target,
+                    "sh",
+                    "-c",
+                    'ps -eo pid,ppid,pgid,stat,comm; find "/run/user/1001/xpra/$1" -maxdepth 2 -printf "%y %f\\n" 2>/dev/null',
+                    "elsewindow-cleanup-diagnostic",
+                    display,
+                ],
+                capture_output=True,
+                check=False,
+            )
+            records = run_process(
+                [
+                    resources.podman,
+                    "exec",
+                    target,
+                    "journalctl",
+                    "--no-pager",
+                    "--all",
+                    "--output=short-monotonic",
+                    "--lines=160",
+                    *(f"ELSEWINDOW_SESSION={value}" for value in evidence["sessions"]),
+                ],
+                capture_output=True,
+                check=False,
+            )
+            timeline = "\n".join(
+                line[:400]
+                for line in records.stdout.decode(errors="replace").splitlines()
+            )[-16000:]
+            raise LiveFailure(
+                f"{error}; process and owned-path evidence:\n{details.stdout.decode(errors='replace')[-4096:]}"
+                f"\nowned session shutdown timeline:\n{timeline}"
+            ) from error
     buses = evidence.get("buses")
     if not isinstance(buses, list) or not buses:
         raise LiveFailure("the private bus lifecycle evidence is missing")
+    owners = []
     for bus in buses:
+        if not isinstance(bus, dict) or not isinstance(bus.get("services"), list):
+            raise LiveFailure(
+                "the private desktop service lifecycle evidence is missing"
+            )
+        owners.extend((bus, *bus["services"]))
+    for bus in owners:
         if (
             not isinstance(bus, dict)
             or not isinstance(bus.get("pid"), int)
@@ -309,10 +388,20 @@ def verify_case_cleanup(
         wait_until("owned notification bus cleanup", ended)
 
 
+def resumed_cases(from_case: str | None) -> tuple[str, ...]:
+    """Select the ordered matrix tail that starts at a failed case."""
+    if from_case is None:
+        return LIVE_CASES
+    if from_case not in LIVE_CASES:
+        raise LiveFailure(f"unknown live case to resume from: {from_case}")
+    return LIVE_CASES[LIVE_CASES.index(from_case) :]
+
+
 def run_xpra_matrix(
     resources: LiveResources,
     target: str,
     client: str,
+    from_case: str | None = None,
 ) -> None:
     """Prove SSH-owned attach, detach, master loss, and selective cleanup."""
     if not LIVE_DRIVER.is_file():
@@ -348,12 +437,20 @@ def run_xpra_matrix(
         "live: prepared Xpra client reports matched PyOpenGL and zerocopy=True",
         file=sys.stderr,
     )
-    for case in ("linger-declined", "linger"):
+    cases = resumed_cases(from_case)
+    if from_case is not None:
+        print(
+            f"live: resuming the matrix at {from_case}; earlier cases are skipped, "
+            "so finish with one complete run",
+            file=sys.stderr,
+        )
+    for case in LINGER_CASES:
+        if case not in cases:
+            continue
         evidence = run_authenticated_driver(resources, target, client, case)
         if case == "linger-declined" and evidence.get("declined") is not True:
             raise LiveFailure("the linger refusal case did not refuse")
-        if case == "linger":
-            verify_case_cleanup(resources, target, evidence, PERSISTENT_MARKER)
+        verify_case_cleanup(resources, target, evidence, PERSISTENT_MARKER)
         podman_exec(
             resources,
             target,
@@ -364,6 +461,25 @@ def run_xpra_matrix(
             purpose="checking fixture linger",
         )
         print(f"live: {case} lifecycle and journals verified", file=sys.stderr)
+    if "linger" not in cases:
+        # Leave the state the skipped consent case establishes, through the same
+        # logind session and sudo rule that the product's consent uses.
+        podman_exec(
+            resources,
+            client,
+            "ssh",
+            TARGET_ALIAS,
+            "/usr/bin/sudo -n /usr/bin/loginctl enable-linger 1001",
+            purpose="enabling fixture linger for a resumed matrix",
+        )
+        podman_exec(
+            resources,
+            target,
+            "test",
+            "-e",
+            "/var/lib/systemd/linger/xpra-test",
+            purpose="checking resumed fixture linger",
+        )
     start_unrelated_resources(resources, target)
     try:
         wait_until(
@@ -376,14 +492,22 @@ def run_xpra_matrix(
             f"{error}; readiness={unrelated_state(resources, target)}{suffix}"
         ) from error
     for case, marker in (
-        ("detach", OWNED_MARKER),
-        ("abrupt", ABRUPT_MARKER),
-        ("persistent", PERSISTENT_MARKER),
+        (selected, selected_marker)
+        for selected, selected_marker in LIFECYCLE_CASES
+        if selected in cases
+        for _attempt in range(ABRUPT_REPETITIONS if selected == "abrupt" else 1)
     ):
+        print(f"live: checking {case} lifecycle", file=sys.stderr)
         evidence = run_authenticated_driver(resources, target, client, case)
         verify_case_cleanup(resources, target, evidence, marker)
         verify_unrelated(resources, target)
-        if case == "persistent":
+        if case == AGENT_CASE:
+            print(
+                "live: agent notification windows "
+                f"{json.dumps(evidence.get('notifications'), sort_keys=True)}",
+                file=sys.stderr,
+            )
+        if case in {"persistent", AGENT_CASE}:
             podman_exec(
                 resources,
                 target,
@@ -396,8 +520,13 @@ def run_xpra_matrix(
         print(f"live: {case} lifecycle and journals verified", file=sys.stderr)
 
     release = target_release
+    scope = (
+        "matrix"
+        if from_case is None
+        else f"matrix tail from {from_case} (not a complete run)"
+    )
     print(
-        "live: Xpra SSH lifecycle and dual-host journal matrix passed with fork release "
-        f"{release['release_id']} ({release['version']}, {release['commit']})",
+        f"live: Xpra SSH lifecycle and dual-host journal {scope} passed with fork "
+        f"release {release['release_id']} ({release['version']}, {release['commit']})",
         file=sys.stderr,
     )

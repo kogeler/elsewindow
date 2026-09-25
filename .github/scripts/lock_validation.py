@@ -7,13 +7,25 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
-from dependency_snapshot import AUDIENCES, LOCK_NAMES, SnapshotError, build_manifests
+from dependency_snapshot import (
+    AUDIENCES,
+    LOCK_NAMES,
+    SnapshotError,
+    build_manifests,
+    direct_requirements,
+)
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def validate(root: Path) -> dict[str, int]:
+    expected = direct_requirements(root / "requirements.in")
+    if set(expected) != {"ssh-wrapper"}:
+        raise SnapshotError(
+            "requirements.in must contain only the SSH runtime dependency"
+        )
     manifests = build_manifests(root)
     if tuple(manifests) != LOCK_NAMES:
         raise SnapshotError("dependency manifest order or inventory differs")
@@ -23,11 +35,12 @@ def validate(root: Path) -> dict[str, int]:
     wrapper = runtime.get("ssh-wrapper")
     if (
         not isinstance(wrapper, dict)
-        or wrapper.get("package_url") != "pkg:pypi/ssh-wrapper@0.1.0"
+        or wrapper.get("package_url")
+        != f"pkg:pypi/ssh-wrapper@{quote(expected['ssh-wrapper'], safe='')}"
         or wrapper.get("relationship") != "direct"
         or wrapper.get("scope") != "runtime"
     ):
-        raise SnapshotError("runtime lock must contain exact ssh-wrapper==0.1.0")
+        raise SnapshotError("runtime lock must match the exact pin in requirements.in")
     for name in (f"requirements-{audience}.txt" for audience in AUDIENCES):
         resolved = manifests[name]["resolved"]
         if not isinstance(resolved, dict) or not set(runtime).issubset(resolved):

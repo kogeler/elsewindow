@@ -11,6 +11,7 @@ import pytest
 
 from elsewindow import cli
 from elsewindow.config import DEFAULT_NETWORK_PROFILE, SUPPORTED_NETWORK_PROFILES
+from tools.runtime_dependency import runtime_version
 
 
 def _path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -36,11 +37,49 @@ def test_help_is_english_and_documents_both_authority_forms(
     assert "--encoding-profile" in output
     assert "--network-profile" in output
     assert "--clipboard {off,to-server,both}" in output
+    assert "--env NAME[=VALUE]" in output
     assert "--log-level" in output
     assert "debug-clipboard" in output
     assert "--diagnose" in output
     assert DEFAULT_NETWORK_PROFILE in output
     assert "application argv after --" in output
+
+
+@pytest.mark.parametrize("option", ("--prepare-xpra", "--diagnose"))
+def test_setup_rejects_application_environment(option: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        cli.main([option, "--env", "LANG=C"])
+    assert raised.value.code == 2
+
+
+@pytest.mark.parametrize("error_type", (cli.JournalError, OSError))
+def test_optional_diagnostics_warn_without_failing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error_type: type[Exception],
+) -> None:
+    import subprocess
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(cli, "prepared_launcher", lambda path: path)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, b'{"notifications": false, "render": false}', b""
+        ),
+    )
+
+    def unavailable(_self) -> None:
+        raise error_type("missing")
+
+    monkeypatch.setattr(cli.Journal, "open", unavailable)
+    assert cli.main(["--diagnose"]) == 0
+    output = capsys.readouterr()
+    assert "optional-local-notifications: unavailable" in output.out
+    assert "python3-dbus" in output.err and "dunst" in output.err
+    assert "journald is unavailable" in output.err
+    assert "optional-remote-features: checked after SSH" in output.out
 
 
 def test_diagnose_reports_versions_resources_and_missing_commands(
@@ -54,7 +93,7 @@ def test_diagnose_reports_versions_resources_and_missing_commands(
 
     captured = capsys.readouterr()
     assert f"elsewindow: {cli.__version__}" in captured.out
-    assert "ssh-wrapper: 0.1.0" in captured.out
+    assert f"ssh-wrapper: {runtime_version()}" in captured.out.splitlines()
     assert "live-cli.yml: sha256:" in captured.out
     assert "profiles.yml: sha256:" in captured.out
     assert captured.err.splitlines() == [

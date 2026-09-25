@@ -10,6 +10,7 @@ import tomllib
 from pathlib import Path
 
 import elsewindow
+from tools.runtime_dependency import runtime_version
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,7 +41,7 @@ def test_public_metadata_has_one_exact_elsewindow_identity() -> None:
         for line in (ROOT / "requirements.in").read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     ]
-    assert runtime == ["ssh-wrapper==0.1.0"]
+    assert runtime == [f"ssh-wrapper=={runtime_version(ROOT)}"]
     assert project["scripts"] == {"elsewindow": "elsewindow.cli:main"}
     assert project["urls"] == {
         "Homepage": "https://kogeler.github.io/elsewindow/",
@@ -93,6 +94,10 @@ def test_version_resolves_from_the_single_source() -> None:
     assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
     assert elsewindow.__version__ == version
     assert f"## [{version}] - " in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    for name in ("README.md", "doc/getting-started.md"):
+        documentation = (ROOT / name).read_text(encoding="utf-8")
+        assert "[`.version`]" in documentation
+        assert re.search(r"elsewindow==[0-9]", documentation) is None
 
 
 def test_sdist_manifest_excludes_nonproduct_trees() -> None:

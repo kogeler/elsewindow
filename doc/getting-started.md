@@ -5,13 +5,18 @@
 - CPython 3.13 or 3.14 with `venv`;
 - GNU Make, OpenSSH, and `false` locally;
 - access to the published
-  [`ssh-wrapper==0.1.0`](https://pypi.org/project/ssh-wrapper/0.1.0/) wheel when
-  preparing the runtime;
+  [`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/) wheel pinned in
+  [`requirements.in`](../requirements.in) when preparing the runtime;
 - the reviewed maintained-fork Xpra packages locally and remotely;
 - local system Python venv support (`python3-venv` on the supported systems);
-- an accessible systemd journal on both hosts;
 - a local graphical session and a remote Linux account capable of running the
   Wayland Xpra server.
+
+Notifications, portal dialogs, native journal recording, GPU acceleration, and
+persistence have [additional prerequisites](cli.md#optional-desktop-features).
+Elsewindow warns with the relevant host and package names when optional support
+is unavailable and continues with the affected feature disabled. It never
+installs system packages during startup.
 
 Install the maintained package build with the reviewed
 [`install_xpra_release.py`](../tools/install_xpra_release.py) helper when the
@@ -35,15 +40,18 @@ DEBs and their dependencies with APT rather than `dpkg -i`.
 
 ## Install The Python Command
 
-After the first release, use either normal pip or pipx installation:
+Install the latest published release with pip or pipx:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.2.0"
-# or: pipx install "elsewindow==0.2.0"
+python3.14 -m pip install elsewindow
+# or: pipx install elsewindow
 elsewindow --help
 elsewindow --prepare-xpra
 elsewindow --diagnose
 ```
+
+The version prepared by this source tree is recorded only in
+[`.version`](../.version).
 
 ## Prepare A Source Checkout
 

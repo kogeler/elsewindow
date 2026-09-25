@@ -9,9 +9,37 @@ import os
 import selectors
 import subprocess
 import tempfile
+from collections.abc import Callable
+from html import escape
+from pathlib import Path
 
 DBUS_DAEMON = "/usr/bin/dbus-daemon"
 START_TIMEOUT = 5.0
+BUS_CONFIG = """<busconfig>
+  <type>session</type>
+  <listen>{address}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow own="*"/>
+    <allow send_destination="*"/>
+    <allow receive_sender="*"/>
+    <deny send_destination="org.freedesktop.portal.Desktop" send_type="method_call"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.portal.FileChooser"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.portal.Notification"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.portal.Request"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.DBus.Properties"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.DBus.Introspectable"/>
+    <allow send_destination="org.freedesktop.portal.Desktop" send_interface="org.freedesktop.DBus.Peer"/>
+    <deny send_destination="org.freedesktop.impl.portal.desktop.gtk" send_type="method_call"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.impl.portal.FileChooser"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.impl.portal.Notification"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.impl.portal.Request"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.DBus.Properties"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.DBus.Introspectable"/>
+    <allow send_destination="org.freedesktop.impl.portal.desktop.gtk" send_interface="org.freedesktop.DBus.Peer"/>
+  </policy>
+</busconfig>
+"""
 
 
 class SessionBusError(RuntimeError):
@@ -34,12 +62,17 @@ class OwnedSessionBus:
             key: value
             for key, value in environment.items()
             if not key.startswith("DBUS_")
+            and not key.startswith("ELSEWINDOW_APPLICATION_")
         }
         try:
+            config = Path(self.directory.name) / "session.conf"
+            config.write_text(
+                BUS_CONFIG.format(address=escape(address)), encoding="utf-8"
+            )
             self.process = subprocess.Popen(
                 [
                     DBUS_DAEMON,
-                    "--session",
+                    f"--config-file={config}",
                     "--nofork",
                     "--nopidfile",
                     "--print-address=1",
@@ -69,12 +102,47 @@ class OwnedSessionBus:
                 )
             selected["DBUS_SESSION_BUS_ADDRESS"] = address
             selected["DBUS_SESSION_BUS_PID"] = str(self.process.pid)
+            selected["ELSEWINDOW_SESSION_BUS"] = address
+            selected["ELSEWINDOW_APPLICATION_LOCK"] = str(
+                Path(self.directory.name) / "application.lock"
+            )
             return selected
         except (OSError, SessionBusError) as error:
             self.close()
             raise SessionBusError(
                 "cannot start the private notification bus; install dbus-daemon on the remote host"
             ) from error
+
+    def start_optional(
+        self, environment: dict[str, str], warn: Callable[[str], None]
+    ) -> dict[str, str]:
+        try:
+            return self.start(environment)
+        except SessionBusError:
+            warn(
+                "Remote notifications and portal features disabled for this session: "
+                "the private D-Bus daemon could not start. On Debian/Ubuntu, install "
+                "on the remote host: dbus-daemon python3-dbus python3-gi. "
+                "The application will continue without these features."
+            )
+            selected = {
+                key: value
+                for key, value in environment.items()
+                if not key.startswith("DBUS_")
+                and key != "ELSEWINDOW_SESSION_BUS"
+                and not key.startswith("ELSEWINDOW_APPLICATION_")
+            }
+            # A failed explicit address prevents both desktop-bus discovery and
+            # autolaunch by applications, even when the daemon is absent.
+            selected["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/dev/null"
+            # The one-application scope remains required even without D-Bus.
+            self.directory = tempfile.TemporaryDirectory(
+                prefix="elsewindow-application-"
+            )
+            selected["ELSEWINDOW_APPLICATION_LOCK"] = str(
+                Path(self.directory.name) / "application.lock"
+            )
+            return selected
 
     def close(self) -> None:
         if self.process is not None:

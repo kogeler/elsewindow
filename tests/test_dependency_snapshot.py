@@ -10,6 +10,11 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+
+from tools.runtime_dependency import runtime_version
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_SCRIPT = ROOT / ".github/scripts/dependency_snapshot.py"
@@ -87,7 +92,7 @@ def test_snapshot_contains_all_exact_lock_graphs(tmp_path: Path) -> None:
     assert {item["scope"] for item in builder.values()} == {"development"}
     assert runtime == {
         "ssh-wrapper": {
-            "package_url": "pkg:pypi/ssh-wrapper@0.1.0",
+            "package_url": f"pkg:pypi/ssh-wrapper@{quote(runtime_version(ROOT), safe='')}",
             "relationship": "direct",
             "scope": "runtime",
         }
@@ -117,6 +122,32 @@ def test_snapshot_is_deterministic(tmp_path: Path) -> None:
     assert first_result.returncode == 0, first_result.stderr
     assert second_result.returncode == 0, second_result.stderr
     assert first.read_bytes() == second.read_bytes()
+
+
+def test_lock_validator_follows_a_changed_runtime_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(SNAPSHOT_SCRIPT.parent))
+    from dependency_snapshot import SnapshotError
+    from lock_validation import validate
+
+    _copy_inputs(tmp_path)
+    current = runtime_version(ROOT)
+    # These are inert test fixtures, never edits to maintained generated locks.
+    for version in ("42.3.7", "43.0rc1"):
+        (tmp_path / "requirements.in").write_text(f"ssh-wrapper=={version}\n")
+        for name in LOCKS:
+            path = tmp_path / name
+            path.write_text(
+                path.read_text().replace(
+                    f"ssh-wrapper=={current} \\", f"ssh-wrapper=={version} \\"
+                )
+            )
+        assert validate(tmp_path)["requirements.txt"] == 1
+        current = version
+    (tmp_path / "requirements.in").write_text("ssh-wrapper==44.0\n")
+    with pytest.raises(SnapshotError, match="versions differ"):
+        validate(tmp_path)
 
 
 def test_snapshot_rejects_unrecognized_lock_content(tmp_path: Path) -> None:
@@ -204,7 +235,7 @@ def test_snapshot_rejects_project_dependency_version_duplication(
     project.write_text(
         project.read_text(encoding="utf-8").replace(
             'dynamic = ["version", "dependencies"]',
-            'dynamic = ["version"]\ndependencies = ["ssh-wrapper==0.1.0"]',
+            f'dynamic = ["version"]\ndependencies = ["ssh-wrapper=={runtime_version(ROOT)}"]',
         ),
         encoding="utf-8",
     )

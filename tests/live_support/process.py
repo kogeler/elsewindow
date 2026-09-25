@@ -80,6 +80,7 @@ class Arguments:
     target_image: str
     client_image: str
     preflight_only: bool
+    from_case: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -52,8 +52,59 @@ def test_source_defaults_and_application_argv(executable_path: Path) -> None:
     assert config.clipboard == DEFAULT_CLIPBOARD_POLICY
     assert config.log_level == "warning"
     assert config.persistent is False
+    assert config.application_environment == ()
     assert config.application == ("spotify", "value with spaces")
     assert config.authority_uri == "ssh://workstation"
+
+
+def test_application_environment_supports_explicit_inherited_empty_and_last_values(
+    executable_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INHERITED", "local value")
+    args = build_parser().parse_args(
+        [
+            "--ssh-alias",
+            "workstation",
+            "--env",
+            "MODE=first",
+            "--env",
+            "INHERITED",
+            "--env",
+            "EMPTY=",
+            "--env",
+            "MODE=last=value",
+            "--",
+            "xterm",
+            "--env",
+            "APP_ARGUMENT=literal",
+        ]
+    )
+    config = XpraConfig.from_namespace(args)
+    assert config.application_environment == (
+        ("EMPTY", ""),
+        ("INHERITED", "local value"),
+        ("MODE", "last=value"),
+    )
+    assert config.application == ("xterm", "--env", "APP_ARGUMENT=literal")
+
+
+@pytest.mark.parametrize(
+    "entry", ("UNSET", "BAD-NAME=private-value", "NAME=bad\0value", "DISPLAY=:99")
+)
+def test_invalid_environment_fails_before_startup(
+    executable_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    monkeypatch.delenv("UNSET", raising=False)
+    args = build_parser().parse_args(
+        ["--ssh-alias", "workstation", "--env", entry, "--", "xterm"]
+    )
+    with pytest.raises(SSHError) as raised:
+        XpraConfig.from_namespace(args)
+    assert raised.value.code == "invalid_application_environment"
+    assert "private-value" not in str(raised.value)
 
 
 def test_direct_ipv6_authority_has_an_unambiguous_uri(executable_path: Path) -> None:

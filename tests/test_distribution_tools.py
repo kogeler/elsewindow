@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tools import smoke_distribution
 from tools.build_standalone import (
     StandaloneBuildError,
     standalone_architecture,
@@ -22,6 +23,22 @@ from tools.checksums import ChecksumError, expected_names, write
 from tools.checksums import verify as verify_checksums
 from tools.normalize_sdist import normalize as normalize_sdist
 from tools.normalize_wheel import normalize as normalize_wheel
+
+
+def test_dependency_wheel_selection_follows_current_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(smoke_distribution, "ROOT", tmp_path)
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    for version in ("42.3.7", "43.0rc1"):
+        (tmp_path / "requirements.in").write_text(f"ssh-wrapper=={version}\n")
+        wheel = wheels / f"ssh_wrapper-{version}-py3-none-any.whl"
+        wheel.touch()
+        assert smoke_distribution._dependency_wheel(wheels) == wheel
+    (tmp_path / "requirements.in").write_text("ssh-wrapper==44.0\n")
+    with pytest.raises(smoke_distribution.SmokeError, match="requirements.in"):
+        smoke_distribution._dependency_wheel(wheels)
 
 
 def _sdist(path: Path, *, timestamp: int, owner: int) -> None:

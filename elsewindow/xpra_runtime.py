@@ -25,16 +25,35 @@ BUILD_LOCK_PATH = Path(__file__).with_name("requirements-xpra-build.txt")
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 DIRECTORY_VARIABLE = "ELSEWINDOW_XPRA_VENV"
 STATE_NAME = ".elsewindow-xpra-runtime.json"
-SETUP_HINT = "run make runtime-venv from the checkout, or elsewindow --prepare-xpra"
+VALIDATION_TIMEOUT = 180
+SETUP_HINT = (
+    "prepare with 'make runtime-venv' from the checkout or 'elsewindow --prepare-xpra'"
+)
 PROBE = r"""
 import base64
+import csv
 import hashlib
 import importlib
 import importlib.metadata as metadata
+import io
 import json
 import pathlib
 import sys
 import sysconfig
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+
+def verify_file(distribution, row):
+    relative, recorded_hash, _size = row
+    if not recorded_hash:
+        assert relative.endswith(("/RECORD", ".pyc")), "unhashed package file"
+        return
+    path = pathlib.Path(distribution.locate_file(relative))
+    assert path.resolve().is_relative_to(prefix), "package file escapes venv"
+    mode, separator, expected_hash = recorded_hash.partition("=")
+    assert mode == "sha256" and separator, "unsupported installed file hash"
+    digest = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest())
+    assert digest.rstrip(b"=").decode() == expected_hash, "installed file changed"
 
 identity = {
     "executable": str(pathlib.Path(sys._base_executable).resolve()),
@@ -50,19 +69,18 @@ if len(sys.argv) > 1:
         for d in metadata.distributions(path=[str(local)])
     }
     assert set(installed) == set(expected), "unexpected local package inventory"
-    for name, version in expected.items():
-        distribution = installed[name]
-        assert distribution.version == version, "installed version differs from lock"
-        assert distribution.files, "installed package has no file inventory"
-        for item in distribution.files:
-            if item.hash is None:
-                assert str(item).endswith(("/RECORD", ".pyc")), "unhashed package file"
-                continue
-            path = pathlib.Path(distribution.locate_file(item))
-            assert path.resolve().is_relative_to(prefix), "package file escapes venv"
-            assert item.hash.mode == "sha256", "unsupported installed file hash"
-            digest = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest())
-            assert digest.rstrip(b"=").decode() == item.hash.value, "installed file changed"
+    # Bound simultaneous reads while overlapping shared-filesystem latency.
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        for name, version in expected.items():
+            distribution = installed[name]
+            assert distribution.version == version, "installed version differs from lock"
+            # metadata.files stats every entry and silently filters out missing files.
+            record = distribution.read_text("RECORD")
+            assert record, "installed package has no file inventory"
+            for _ in workers.map(
+                partial(verify_file, distribution), csv.reader(io.StringIO(record))
+            ):
+                pass
     for name in ("OpenGL", "OpenGL_accelerate", "OpenGL_accelerate.formathandler"):
         module = importlib.import_module(name)
         assert pathlib.Path(module.__file__).resolve().is_relative_to(prefix), "foreign module"
@@ -73,6 +91,10 @@ print(json.dumps(identity, sort_keys=True))
 
 class XpraRuntimeError(RuntimeError):
     """The isolated Xpra environment is absent, stale, or cannot be prepared."""
+
+
+class XpraRuntimeTimeout(XpraRuntimeError):
+    """A preparation or validation deadline expired without proving stale inputs."""
 
 
 def system_environment() -> dict[str, str]:
@@ -181,6 +203,10 @@ def _run(arguments: list[str], *, purpose: str, timeout: float = 30) -> bytes:
             env=system_environment(),
             timeout=timeout,
         )
+    except subprocess.TimeoutExpired as error:
+        raise XpraRuntimeTimeout(
+            f"timed out after {timeout:g}s while trying to {purpose}; retry the command"
+        ) from error
     except (OSError, subprocess.SubprocessError) as error:
         raise XpraRuntimeError(f"cannot {purpose}") from error
     if completed.returncode:
@@ -194,7 +220,11 @@ def _identity(python: Path, pins: dict[str, str] | None = None) -> dict[str, Any
         arguments.append(json.dumps(pins))
     try:
         result = json.loads(
-            _run(arguments, purpose="validate the Xpra Python environment")
+            _run(
+                arguments,
+                purpose="validate the Xpra Python environment",
+                timeout=VALIDATION_TIMEOUT if pins is not None else 30,
+            )
         )
     except (ValueError, UnicodeError) as error:
         raise XpraRuntimeError("the Xpra Python identity is invalid") from error
@@ -264,9 +294,6 @@ def _launcher(directory: Path, xpra: Path) -> bytes:
 def _owned(directory: Path) -> dict[str, Any]:
     if directory.is_symlink() or not directory.is_dir():
         raise XpraRuntimeError("the Xpra environment is not an owned directory")
-    status = directory.stat()
-    if status.st_uid != os.getuid() or status.st_mode & 0o077:
-        raise XpraRuntimeError("the Xpra environment must be private to its owner")
     state = directory / STATE_NAME
     if state.is_symlink() or state.stat().st_size > 16 * 1024:
         raise XpraRuntimeError("the Xpra environment ownership record is invalid")
@@ -279,6 +306,7 @@ def _owned(directory: Path) -> dict[str, Any]:
 def prepared_launcher(xpra: Path, directory: Path | None = None) -> Path:
     """Revalidate current lock, interpreter, installed bytes and exact launcher."""
     try:
+        xpra = xpra.resolve(strict=True)
         directory = (
             runtime_directory()
             if directory is None
@@ -311,6 +339,8 @@ def prepared_launcher(xpra: Path, directory: Path | None = None) -> Path:
         if _identity(directory / "bin/python", pins) != identity:
             raise XpraRuntimeError("the Xpra environment Python is incompatible")
         return launcher
+    except XpraRuntimeTimeout:
+        raise
     except (OSError, ValueError, XpraRuntimeError) as error:
         raise XpraRuntimeError(
             f"local Xpra environment is missing or stale; {SETUP_HINT}"
@@ -318,7 +348,8 @@ def prepared_launcher(xpra: Path, directory: Path | None = None) -> Path:
 
 
 def prepare(xpra: Path, directory: Path | None = None) -> Path:
-    """Install only into a private owned venv; never alter system packages."""
+    """Install only into a recorded project venv; never alter system packages."""
+    xpra = xpra.resolve(strict=True)
     directory = (
         runtime_directory() if directory is None else _dedicated_directory(directory)
     )
@@ -347,6 +378,8 @@ def prepare(xpra: Path, directory: Path | None = None) -> Path:
                 ) from error
             try:
                 return prepared_launcher(xpra, directory)
+            except XpraRuntimeTimeout:
+                raise
             except XpraRuntimeError:
                 pass
         print("Preparing the isolated local Xpra Python environment...", flush=True)
