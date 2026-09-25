@@ -1,6 +1,6 @@
 # The package build environment extends the published runtime.
 -r requirements.in
 
-build==1.6.0
+build==1.6.1
 setuptools==84.0.0
 wheel==0.48.0
