@@ -26,6 +26,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from elsewindow.desktop import (
+    APPLICATION_LOADER,
+    application_argv,
+    validate_application_environment,
+)
 from elsewindow.journal import (
     DEFAULT_LOG_LEVEL,
     LOG_LEVELS,
@@ -44,7 +49,7 @@ SCHEMA = 1
 MAX_BYTES = 128 * 1024
 COMMAND_TIMEOUT = 15
 LOADER = REMOTE_LOADER
-APP_LOADER = "import base64,json,os,sys;a=json.loads(base64.b64decode(sys.argv[1]));os.execv(a[0],a)"
+APP_LOADER = APPLICATION_LOADER
 IDENTITY = re.compile(r"[a-f0-9]{64}")
 TOKEN = re.compile(r"[a-f0-9]{32}")
 DISPLAY = re.compile(r"wayland-[0-9]+")
@@ -135,18 +140,24 @@ def prerequisites() -> dict[str, Any]:
                 "persistent_systemd_unavailable",
                 "persistent sessions require systemd, loginctl and systemd-run on the remote host",
             )
-    linger = linger_enabled()
-    manager = False
-    if linger:
-        runtime_directory()
-        manager = (
-            run("/usr/bin/systemctl", "--user", "show-environment").returncode == 0
-        )
-        if not manager:
-            raise AgentError(
-                "persistent_systemd_unavailable",
-                "the remote systemd user manager is not available",
+    try:
+        linger = linger_enabled()
+        manager = False
+        if linger:
+            runtime_directory()
+            manager = (
+                run("/usr/bin/systemctl", "--user", "show-environment").returncode == 0
             )
+            if not manager:
+                raise AgentError(
+                    "persistent_systemd_unavailable",
+                    "the remote systemd user manager is not available",
+                )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise AgentError(
+            "persistent_systemd_unavailable",
+            "the remote systemd user manager is unavailable",
+        ) from error
     return {"linger": linger, "manager": manager}
 
 
@@ -173,7 +184,20 @@ def enable_linger() -> dict[str, Any]:
     return {"linger": True}
 
 
-def canonical_application(value: Any) -> list[str]:
+def request_environment(request: dict[str, Any]) -> dict[str, str]:
+    try:
+        return validate_application_environment(
+            request.get("application_environment", {})
+        )
+    except ValueError as error:
+        raise AgentError(
+            "invalid_application_environment", "the application environment is invalid"
+        ) from error
+
+
+def canonical_application(
+    value: Any, environment: dict[str, str] | None = None
+) -> list[str]:
     if (
         not isinstance(value, list)
         or not value
@@ -186,7 +210,9 @@ def canonical_application(value: Any) -> list[str]:
         )
     executable = value[0]
     if "/" not in executable:
-        executable = shutil.which(executable) or ""
+        executable = (
+            shutil.which(executable, path=(environment or {}).get("PATH")) or ""
+        )
     if not executable:
         raise AgentError(
             "invalid_application", "the remote application executable was not found"
@@ -204,6 +230,21 @@ def canonical_application(value: Any) -> list[str]:
 
 def state_root() -> Path:
     return secure_directory(runtime_directory() / "elsewindow-persistent", create=True)
+
+
+def ordinary_fallback(request: dict[str, Any]) -> dict[str, bool]:
+    """Never turn a failed resume into a second application instance."""
+    application = canonical_application(
+        request["application"], request_environment(request)
+    )
+    key = digest(application)
+    try:
+        runtime = secure_directory(Path("/run/user") / str(os.getuid()))
+        root = secure_directory(runtime / "elsewindow-persistent")
+    except FileNotFoundError:
+        return {"allowed": True}
+    with locked(root, key):
+        return {"allowed": read_record(root, key) is None}
 
 
 @contextmanager
@@ -353,15 +394,47 @@ def public_record(record: dict[str, Any], *, created: bool = False) -> dict[str,
             "xpra_pid",
             "xpra_start",
             "session_name",
+            "server_features",
         )
     } | {"created": created}
+
+
+def canonical_server(
+    server: Any,
+    application: list[str],
+    root: Path,
+    key: str,
+    application_environment: dict[str, str],
+) -> list[str]:
+    if not isinstance(server, list) or not all(isinstance(arg, str) for arg in server):
+        raise AgentError("invalid_configuration", "invalid persistent server command")
+    server = [arg.replace("$XDG_RUNTIME_DIR", str(root.parent)) for arg in server]
+    child = shlex.join(
+        application_argv(
+            tuple(application),
+            "--notifications=no" not in server,
+            application_environment=tuple(application_environment.items()),
+        )
+    )
+    indexes = [i for i, arg in enumerate(server) if arg.startswith("--start-child=")]
+    if len(indexes) != 1:
+        raise AgentError(
+            "invalid_configuration", "persistent server has no unique child command"
+        )
+    server[indexes[0]] = f"--start-child={child}"
+    session_name = f"elsewindow-{key[:16]}"
+    return [
+        f"--session-name={session_name}" if arg.startswith("--session-name=") else arg
+        for arg in server
+    ]
 
 
 def ensure(request: dict[str, Any], source: str) -> dict[str, Any]:
     """Serialize lookup and creation; never stop or replace an existing service."""
     # Complete an accepted launch even if the SSH command loses its terminal.
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    application = canonical_application(request["application"])
+    application_environment = request_environment(request)
+    application = canonical_application(request["application"], application_environment)
     key = digest(application)
     session = log_session(key)
     if request.get("log_session", session) != session:
@@ -372,23 +445,29 @@ def ensure(request: dict[str, Any], source: str) -> dict[str, Any]:
     if level not in LOG_LEVELS:
         raise AgentError("invalid_configuration", "invalid logging policy")
     root = state_root()
-    server = request["server"]
-    if not isinstance(server, list) or not all(isinstance(arg, str) for arg in server):
-        raise AgentError("invalid_configuration", "invalid persistent server command")
-    server = [arg.replace("$XDG_RUNTIME_DIR", str(root.parent)) for arg in server]
-    child = shlex.join((sys.executable, "-c", APP_LOADER, encode(application)))
-    indexes = [i for i, arg in enumerate(server) if arg.startswith("--start-child=")]
-    if len(indexes) != 1:
-        raise AgentError(
-            "invalid_configuration", "persistent server has no unique child command"
-        )
-    server[indexes[0]] = f"--start-child={child}"
+    server = canonical_server(
+        request["server"], application, root, key, application_environment
+    )
+    requested = canonical_server(
+        request.get("requested_server", request["server"]),
+        application,
+        root,
+        key,
+        application_environment,
+    )
+    requested_sha256 = digest(["xpra", *requested[3:]])
     session_name = f"elsewindow-{key[:16]}"
-    server = [
-        f"--session-name={session_name}" if arg.startswith("--session-name=") else arg
-        for arg in server
-    ]
     argv_sha256 = digest(["xpra", *server[3:]])
+    features = request.get("server_features")
+    if features is not None and (
+        not isinstance(features, dict)
+        or set(features) != {"notifications", "encoding_profile"}
+        or type(features["notifications"]) is not bool
+        or not isinstance(features["encoding_profile"], str)
+        or len(features["encoding_profile"]) > 64
+        or features["notifications"] != ("--notifications=no" not in server)
+    ):
+        raise AgentError("invalid_configuration", "invalid persistent feature policy")
     with locked(root, key):
         record = read_record(root, key)
         state = unit_state(key)
@@ -396,9 +475,17 @@ def ensure(request: dict[str, Any], source: str) -> dict[str, Any]:
             verify_unit(record, state)
             if state.get("ActiveState") in {"active", "activating", "reloading"}:
                 assert record is not None
+                if record.get("application_environment", {}) != application_environment:
+                    raise AgentError(
+                        "persistent_environment_mismatch",
+                        "the existing session uses different application environment values; reconnect with its original --env values or exit the application first",
+                    )
                 if (
                     record.get("application") != application
-                    or record.get("argv_sha256") != argv_sha256
+                    or record.get("requested_argv_sha256", record.get("argv_sha256"))
+                    != requested_sha256
+                    or record.get("argv_sha256")
+                    != digest(["xpra", *record["server"][3:]])
                     or record.get("log_level") != level
                     or record.get("journal_protocol") != LOG_PROTOCOL
                     or record.get("log_session") != session
@@ -417,8 +504,11 @@ def ensure(request: dict[str, Any], source: str) -> dict[str, Any]:
             "key": key,
             "token": secrets.token_hex(16),
             "application": application,
+            "application_environment": application_environment,
             "server": server,
             "argv_sha256": argv_sha256,
+            "requested_argv_sha256": requested_sha256,
+            "server_features": features,
             "cwd": str(Path.cwd()),
             "environment": {
                 key: os.environ[key]
@@ -529,7 +619,7 @@ def serve(request: dict[str, Any]) -> None:
                 "server",
                 record["log_session"],
             )
-            journal.open()
+            journal.open_optional()
             record.update(
                 worker_pid=os.getpid(),
                 worker_start=process_start(os.getpid()),
@@ -540,7 +630,10 @@ def serve(request: dict[str, Any]) -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=bus.start(xpra_environment(journal.level)),
+                env=bus.start_optional(
+                    xpra_environment(journal.level),
+                    lambda message: journal.emit(PRIORITIES["warning"], message),
+                ),
             )
             record.update(xpra_pid=process.pid, xpra_start=process_start(process.pid))
             write_record(root, record)
@@ -621,9 +714,11 @@ def main(arguments: list[str]) -> int:
         request = json.loads(base64.b64decode(encoded, validate=True))
         if not isinstance(request, dict):
             raise TypeError("payload must be an object")
-        if action in {
+        result: dict[str, Any]
+        if not request.get("log_deferred", False) and action in {
             "identify",
             "probe",
+            "ordinary-fallback",
             "enable-linger",
             "ensure",
             "status",
@@ -634,9 +729,13 @@ def main(arguments: list[str]) -> int:
                 "server",
                 request.get("log_session", ""),
             )
-            journal.open()
+            journal.open_optional()
         if action == "identify":
-            key = digest(canonical_application(request["application"]))
+            key = digest(
+                canonical_application(
+                    request["application"], request_environment(request)
+                )
+            )
             # No successful record precedes identity negotiation. Errors still
             # use the shared invocation ID supplied by the client.
             result = {"key": key, "log_session": log_session(key)}
@@ -644,6 +743,8 @@ def main(arguments: list[str]) -> int:
             result = prerequisites()
             if journal is not None:
                 journal.emit(PRIORITIES["info"], "persistent prerequisites checked")
+        elif action == "ordinary-fallback":
+            result = ordinary_fallback(request)
         elif action == "enable-linger":
             result = enable_linger()
         elif action == "ensure":
@@ -661,7 +762,15 @@ def main(arguments: list[str]) -> int:
         return 0
     except AgentError as error:
         if journal is not None:
-            journal.emit(PRIORITIES["error"], f"{error.code}: {error}")
+            journal.emit(
+                PRIORITIES[
+                    "warning"
+                    if action == "probe"
+                    and error.code == "persistent_systemd_unavailable"
+                    else "error"
+                ],
+                f"{error.code}: {error}",
+            )
         if not serving:
             print(json.dumps({"error": error.code, "message": str(error)}), flush=True)
     except JournalError:

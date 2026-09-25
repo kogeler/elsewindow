@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ssh_wrapper.connection import ConnectionSpec, resolve_program
 from ssh_wrapper.errors import SSHError
 
 from . import live_config
+from .desktop import validate_application_environment
 from .journal import DEFAULT_LOG_LEVEL, LOG_LEVELS
 from .xpra_runtime import XpraRuntimeError, prepared_launcher
 
@@ -51,6 +53,25 @@ def _local_xpra() -> Path:
         raise SSHError("xpra_environment_unprepared", str(error)) from error
 
 
+def _application_environment(entries: list[str] | None) -> tuple[tuple[str, str], ...]:
+    values: dict[str, str] = {}
+    try:
+        for entry in entries or ():
+            name, separator, value = entry.partition("=")
+            validate_application_environment({name: value})
+            if not separator:
+                if name not in os.environ:
+                    raise SSHError(
+                        "invalid_application_environment",
+                        f"local environment variable {name} is not set",
+                    )
+                value = os.environ[name]
+            values[name] = value
+        return tuple(validate_application_environment(values).items())
+    except ValueError as error:
+        raise SSHError("invalid_application_environment", str(error)) from error
+
+
 @dataclass(frozen=True, slots=True)
 class XpraConfig:
     """All startup policy for one independently owned GUI session."""
@@ -72,6 +93,7 @@ class XpraConfig:
     xpra_path: Path
     log_level: str = DEFAULT_LOG_LEVEL
     persistent: bool = False
+    application_environment: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_namespace(cls, args: argparse.Namespace) -> XpraConfig:
@@ -113,6 +135,7 @@ class XpraConfig:
                 "invalid_application",
                 f"application argv is limited to {MAX_APPLICATION_BYTES} UTF-8 bytes",
             )
+        application_environment = _application_environment(args.env)
         if args.encoding_profile not in SUPPORTED_ENCODING_PROFILES:
             raise SSHError(
                 "invalid_configuration",
@@ -160,6 +183,7 @@ class XpraConfig:
             xpra_path=_local_xpra(),
             log_level=args.log_level,
             persistent=args.persistent,
+            application_environment=application_environment,
         )
 
     @property

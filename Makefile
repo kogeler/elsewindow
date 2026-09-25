@@ -59,6 +59,8 @@ COMPILE := --quiet --strip-extras --allow-unsafe --generate-hashes \
 	--no-emit-find-links --rebuild
 LOCK_UPGRADE ?=
 VERSION_ARGS ?=
+TESTS ?=
+LIVE_FROM ?=
 ACTIONLINT_IMAGE := docker.io/rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 GOVERNANCE_CONTEXT := containers/governance/Containerfile \
@@ -94,7 +96,7 @@ LOCK_ONLINE = $(subst size=512m,size=4g,$(BOX_ONLINE))
 	dev-venv dependency-wheels package build standalone smoke-wheel smoke-sdist \
 	smoke-standalone smoke reproducibility checksums lock \
 	refresh-dependencies freeze-check format format-check lint type-check bandit \
-	test syntax shellcheck lock-validate audit audit-raw licenses outdated \
+	test test-focused syntax shellcheck lock-validate audit audit-raw licenses outdated \
 	dependency-snapshot version-check release-notes coverage-report \
 	governance-image lock-image compatibility-image validator-image-actionlint \
 	validate-actions compatibility-python test-network-block confinement-test \
@@ -114,11 +116,13 @@ help:
 		'make docs-serve         Serve the rendered documentation locally' \
 		'make lock               Recompile all eight hash locks' \
 		'make refresh-dependencies Upgrade and recompile all locks' \
+		'make test-focused TESTS=tests/test_x.py Run selected tests without coverage' \
 		'make check              Run the complete local governance gate' \
 		'make ci                 Run host checks, audit, and Python 3.13 compatibility' \
 		'make dependency-snapshot Build the exact dependency graph' \
 		'make release-notes      Render the current changelog section' \
-		'make live-test          Run the automatic Xpra lifecycle matrix'
+		'make live-test          Run the automatic Xpra lifecycle matrix' \
+		'make live-test LIVE_FROM=CASE Resume at a fixed failed case, then run completely'
 
 runtime-venv: runtime-python-venv xpra-venv
 
@@ -129,13 +133,14 @@ xpra-venv: runtime-python-venv
 runtime-python-venv:
 	@if [[ ! -x '$(RUNTIME_PYTHON)' ]] || [[ ! -f '$(RUNTIME_STATE)' ]] || \
 		! cmp -s '$(RUNTIME_LOCK)' '$(RUNTIME_STATE)' || \
-		! '$(RUNTIME_PYTHON)' -c 'import importlib.metadata, ssh_wrapper; assert importlib.metadata.version("ssh-wrapper") == "0.1.0"' >/dev/null 2>&1; then \
+		! '$(RUNTIME_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1; then \
 		if [[ -e '$(RUNTIME_VENV)' ]]; then find '$(RUNTIME_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(RUNTIME_VENV)'; \
 		$(RUNTIME_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: \
 			--requirement '$(RUNTIME_LOCK)'; \
 		$(RUNTIME_PYTHON) -m pip check; \
+		$(RUNTIME_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(RUNTIME_LOCK)' '$(RUNTIME_STATE)'; \
 		$(RUNTIME_PYTHON) -m pip uninstall --quiet --yes pip; \
 	fi
@@ -143,11 +148,13 @@ runtime-python-venv:
 quality-venv:
 	@if [[ ! -x '$(QUALITY_PYTHON)' ]] || [[ ! -f '$(QUALITY_STATE)' ]] || \
 		! cmp -s '$(QUALITY_LOCK)' '$(QUALITY_STATE)' || \
-		! '$(QUALITY_PYTHON)' -c 'import importlib.metadata, pip, ssh_wrapper; assert importlib.metadata.version("ssh-wrapper") == "0.1.0"' >/dev/null 2>&1; then \
+		! '$(QUALITY_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1 || \
+		! '$(QUALITY_PYTHON)' -I -c 'import pip' >/dev/null 2>&1; then \
 		if [[ -e '$(QUALITY_VENV)' ]]; then find '$(QUALITY_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(QUALITY_VENV)'; \
 		$(QUALITY_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: --requirement '$(QUALITY_LOCK)'; \
+		$(QUALITY_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(QUALITY_LOCK)' '$(QUALITY_STATE)'; \
 	fi
 	@$(QUALITY_PYTHON) -m pip check
@@ -155,11 +162,13 @@ quality-venv:
 test-venv:
 	@if [[ ! -x '$(TEST_PYTHON)' ]] || [[ ! -f '$(TEST_STATE)' ]] || \
 		! cmp -s '$(TEST_LOCK)' '$(TEST_STATE)' || \
-		! '$(TEST_PYTHON)' -c 'import importlib.metadata, pip, ssh_wrapper; assert importlib.metadata.version("ssh-wrapper") == "0.1.0"' >/dev/null 2>&1; then \
+		! '$(TEST_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1 || \
+		! '$(TEST_PYTHON)' -I -c 'import pip' >/dev/null 2>&1; then \
 		if [[ -e '$(TEST_VENV)' ]]; then find '$(TEST_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(TEST_VENV)'; \
 		$(TEST_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: --requirement '$(TEST_LOCK)'; \
+		$(TEST_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(TEST_LOCK)' '$(TEST_STATE)'; \
 	fi
 	@$(TEST_PYTHON) -m pip check
@@ -167,11 +176,13 @@ test-venv:
 package-venv:
 	@if [[ ! -x '$(PACKAGE_PYTHON)' ]] || [[ ! -f '$(PACKAGE_STATE)' ]] || \
 		! cmp -s '$(PACKAGE_LOCK)' '$(PACKAGE_STATE)' || \
-		! '$(PACKAGE_PYTHON)' -c 'import build, pip, ssh_wrapper' >/dev/null 2>&1; then \
+		! '$(PACKAGE_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1 || \
+		! '$(PACKAGE_PYTHON)' -I -c 'import build, pip' >/dev/null 2>&1; then \
 		if [[ -e '$(PACKAGE_VENV)' ]]; then find '$(PACKAGE_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(PACKAGE_VENV)'; \
 		$(PACKAGE_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: --requirement '$(PACKAGE_LOCK)'; \
+		$(PACKAGE_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(PACKAGE_LOCK)' '$(PACKAGE_STATE)'; \
 	fi
 	@$(PACKAGE_PYTHON) -m pip check
@@ -179,11 +190,13 @@ package-venv:
 standalone-venv:
 	@if [[ ! -x '$(STANDALONE_PYTHON)' ]] || [[ ! -f '$(STANDALONE_STATE)' ]] || \
 		! cmp -s '$(STANDALONE_LOCK)' '$(STANDALONE_STATE)' || \
-		! '$(STANDALONE_PYTHON)' -c 'import PyInstaller, pip, ssh_wrapper' >/dev/null 2>&1; then \
+		! '$(STANDALONE_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1 || \
+		! '$(STANDALONE_PYTHON)' -I -c 'import PyInstaller, pip' >/dev/null 2>&1; then \
 		if [[ -e '$(STANDALONE_VENV)' ]]; then find '$(STANDALONE_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(STANDALONE_VENV)'; \
 		$(STANDALONE_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: --requirement '$(STANDALONE_LOCK)'; \
+		$(STANDALONE_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(STANDALONE_LOCK)' '$(STANDALONE_STATE)'; \
 	fi
 	@$(STANDALONE_PYTHON) -m pip check
@@ -191,11 +204,13 @@ standalone-venv:
 docs-venv:
 	@if [[ ! -x '$(DOCS_PYTHON)' ]] || [[ ! -f '$(DOCS_STATE)' ]] || \
 		! cmp -s '$(DOCS_LOCK)' '$(DOCS_STATE)' || \
-		! '$(DOCS_PYTHON)' -c 'import mkdocs, pip, ssh_wrapper' >/dev/null 2>&1; then \
+		! '$(DOCS_PYTHON)' -I tools/runtime_dependency.py --check-installed >/dev/null 2>&1 || \
+		! '$(DOCS_PYTHON)' -I -c 'import mkdocs, pip' >/dev/null 2>&1; then \
 		if [[ -e '$(DOCS_VENV)' ]]; then find '$(DOCS_VENV)' -depth -delete; fi; \
 		$(SYSTEM_PYTHON) -m venv '$(DOCS_VENV)'; \
 		$(DOCS_PYTHON) -m pip install --quiet --require-hashes \
 			--only-binary=:all: --requirement '$(DOCS_LOCK)'; \
+		$(DOCS_PYTHON) -I tools/runtime_dependency.py --check-installed; \
 		cp -- '$(DOCS_LOCK)' '$(DOCS_STATE)'; \
 	fi
 	@$(DOCS_PYTHON) -m pip check
@@ -375,6 +390,15 @@ test: test-venv
 		$(TEST_PYTHON) -m coverage report --format=total > '$(COVERAGE_TOTAL)'; \
 		cp -- coverage.xml '$(ARTIFACTS)/coverage.xml'; exit $$status
 
+# The smallest real test after an atomic change; `make test` stays the complete
+# coverage-gated suite.
+test-focused: test-venv
+	@if [[ -z '$(strip $(TESTS))' ]]; then \
+		printf '%s\n' 'set TESTS to pytest paths or node IDs, for example TESTS=tests/test_desktop.py' >&2; \
+		exit 2; \
+	fi
+	@$(TEST_PYTHON) -m pytest --no-cov $(TESTS)
+
 syntax: test-venv
 	@$(TEST_PYTHON) -m compileall -q \
 		elsewindow tests tools doc/site .github/scripts
@@ -523,7 +547,8 @@ live-test: runtime-python-venv package xpra-images
 	ELSEWINDOW_LIVE_TARGET_CONFINE='$(LIVE_TARGET_CONFINE)' \
 	PYTHONPATH='$(CURDIR)' $(RUNTIME_PYTHON) $(LIVE_HARNESS) \
 		--target-image "$$target_image" \
-		--client-image "$$client_image"
+		--client-image "$$client_image" \
+		$(if $(strip $(LIVE_FROM)),--from-case '$(strip $(LIVE_FROM))')
 
 clean-containers:
 	@containers=$$($(PODMAN) ps --all --quiet --filter \

@@ -50,6 +50,14 @@ def test_image_input_binds_role_files_release_and_asset() -> None:
     assert len(first) == 64
 
 
+def test_disposable_target_masks_the_packaged_xpra_listener() -> None:
+    target = next(spec for spec in images.SPECS if spec.role == "target")
+    source = target.containerfile.read_text()
+    assert source.index("systemctl mask xpra.socket xpra.service") > source.index(
+        "/usr/bin/python3 /usr/local/libexec/install-release.py"
+    )
+
+
 def test_image_labels_bind_release_input_and_role() -> None:
     selected = release()
     spec = images.SPECS[1]

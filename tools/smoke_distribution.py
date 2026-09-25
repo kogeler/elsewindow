@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from tools.runtime_dependency import runtime_version
 from tools.smoke_xpra_runtime import smoke_xpra_runtime
 
 
@@ -81,9 +82,12 @@ def _extract_sdist(path: Path, destination: Path) -> Path:
 
 
 def _dependency_wheel(directory: Path) -> Path:
-    matches = tuple(directory.glob("ssh_wrapper-0.1.0-*.whl"))
+    version = runtime_version(ROOT)
+    matches = tuple(directory.glob(f"ssh_wrapper-{version}-*.whl"))
     if len(matches) != 1 or not matches[0].is_file():
-        raise SmokeError("expected one ssh-wrapper 0.1.0 dependency wheel")
+        raise SmokeError(
+            "expected one ssh-wrapper dependency wheel matching requirements.in"
+        )
     return matches[0].resolve()
 
 
@@ -98,6 +102,7 @@ def smoke(
 ) -> None:
     """Exercise one artifact kind entirely outside the source tree."""
     version = (ROOT / ".version").read_text(encoding="utf-8").strip()
+    wrapper_version = runtime_version(ROOT)
     python = _executable(python, label="Python interpreter")
     mypy = _executable(mypy, label="mypy")
     wrapper = _dependency_wheel(dependency_dist.resolve())
@@ -197,7 +202,7 @@ def smoke(
 
             assert elsewindow.__version__ == {version!r}
             assert importlib.metadata.version("elsewindow") == {version!r}
-            assert importlib.metadata.version("ssh-wrapper") == "0.1.0"
+            assert importlib.metadata.version("ssh-wrapper") == {wrapper_version!r}
             assert Path(elsewindow.__file__).resolve().is_relative_to(Path(sys.prefix))
             assert Path(ssh_wrapper.__file__).resolve().is_relative_to(Path(sys.prefix))
             package = importlib.resources.files("elsewindow")

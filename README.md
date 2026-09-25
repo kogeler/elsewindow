@@ -7,21 +7,25 @@ cleans only the server, application process group, sockets, and runtime state
 created by that invocation.
 
 The application renders through the remote Wayland compositor and remote GPU.
-Only Xpra picture, input, clipboard, and control traffic crosses SSH.
+Only Xpra picture, input, clipboard, notification, and control traffic crosses SSH.
 
 ## Install And Run
 
 The Python distribution requires Linux, CPython 3.13 or 3.14, OpenSSH,
-`false`, a local graphical session, and compatible Xpra packages and an
-accessible system journal on both systems. Install with pip or pipx after the
-first release:
+`false`, a local graphical session, and compatible Xpra packages on both
+systems. [Optional desktop features](doc/cli.md#optional-desktop-features)
+have separate system prerequisites: missing support produces a warning and
+disables only that feature for the session. Startup never installs packages.
+Install the latest published release with pip or pipx:
 
 ```bash
-python3.14 -m pip install "elsewindow==0.2.0"
-# or: pipx install "elsewindow==0.2.0"
+python3.14 -m pip install elsewindow
+# or: pipx install elsewindow
 elsewindow --prepare-xpra
 elsewindow --ssh-alias agents-a -- xterm
 ```
+
+The version prepared by this source tree is recorded only in [`.version`](.version).
 
 Check packaged versions, profile digests, Linux support, and local commands
 without opening a connection:
@@ -31,7 +35,8 @@ elsewindow --diagnose
 ```
 
 The published distribution resolves the exact reviewed
-[`ssh-wrapper==0.1.0`](https://pypi.org/project/ssh-wrapper/0.1.0/) dependency.
+[`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/) release pinned only in
+[`requirements.in`](requirements.in).
 For a source checkout, prepare the hash-locked runtime and use the repository
 launcher from any working directory:
 
@@ -61,7 +66,9 @@ elsewindow \
 
 See the [CLI reference](doc/cli.md) for every option, default, and allowed
 value, including encoding/network profiles, clipboard policy, logging, and
-persistence. Reviewed profile arguments come from the packaged YAML mirrors.
+persistence. Repeat [`--env`](doc/cli.md#application-environment) to set remote
+application variables or copy explicitly named local values. Reviewed profile
+arguments come from the packaged YAML mirrors.
 The [Xpra guide](doc/xpra.md) covers hardware, application, and lifecycle
 behavior; the [security model](doc/security.md) explains clipboard and logging
 trust boundaries.

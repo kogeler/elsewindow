@@ -2,7 +2,7 @@
 
 `elsewindow` starts one remote GUI application and displays its windows
 through Xpra. It uses the published
-[`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/0.1.0/) package for its
+[`ssh-wrapper`](https://pypi.org/project/ssh-wrapper/) package for its
 single-master, mux-only OpenSSH lifecycle.
 
 ## Why The Maintained Xpra Fork Is Required
@@ -93,7 +93,8 @@ The CLI reference owns the [encoding profiles](cli.md#encoding-profile) and
 against these mirrors. Detailed codec, GPU, alpha-transition, application, and
 rendering acceptance remains exclusively in the fork that produces the package.
 
-Production consumes the canonical base, lifecycle, selected transport, and
+The mirrored client base supplies ordinary mouse-wheel forwarding. Production
+consumes the canonical base, lifecycle, selected transport, and
 selected network blocks exactly. It excludes fork-only diagnostics and helper
 commands, translates only the three container-private socket/session paths to
 the owned remote runtime, and appends this project's selected clipboard policy,
@@ -104,8 +105,9 @@ GUI defaults, remaining auxiliary-data restrictions, and dynamic session/applica
 The fork's live base retains `--minimal`. Elsewindow appends a small, explicit
 GUI policy in `session.py` after the unchanged mirrored blocks: custom cursor
 shapes and detected DPI on both peers; mouse-wheel forwarding on both axes,
-keyboard-state synchronization, modal-window handling, and initially unscaled
+keyboard-state synchronization and initially unscaled
 client scaling on the client. These are defaults, not new public switches.
+The mirrored client base enables modal-window handling.
 Pointer motion, buttons, focus, resizing and application key combinations
 remain ordinary Xpra behavior; raw keycodes and Xpra's own hotkeys stay disabled.
 Remote application notifications are also enabled, using the private owned

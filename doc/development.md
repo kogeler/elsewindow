@@ -1,6 +1,8 @@
 # Development
 
-The consumer metadata pins the published `ssh-wrapper==0.1.0` distribution.
+[`requirements.in`](../requirements.in) alone pins the published `ssh-wrapper`
+distribution. Environment, package, standalone and live checks derive the expected
+version from that input instead of maintaining version constants of their own.
 Runtime and development environments install its PyPI wheel through the
 project-owned hash locks. Unit tests import that installed distribution;
 pytest never adds an alternate source directory to its import path.
@@ -11,6 +13,16 @@ Prepare and run the complete local suite:
 make dev-venv
 make format
 make check
+```
+
+Every build, image, container, and test action runs through a Make target;
+ad-hoc Podman, build, or test commands and throwaway drivers or derived images
+are not part of the workflow, even for diagnosis. A procedure needed more than
+once becomes a Make target, or extends an existing one, before it is run. After
+each atomic change, run the smallest owning test without the coverage gate:
+
+```bash
+make test-focused TESTS=tests/test_desktop.py
 ```
 
 All Make environments live beneath `.venvs/<machine-user-key>/`; the standard-
@@ -37,7 +49,9 @@ PyOpenGL pair overrides distribution Python modules. The runtime-only bootstrap
 target `make runtime-python-venv` is used by the container harness, which does
 not need Xpra installed on its orchestration host. Every session validates the
 current Xpra lock, interpreter identity, versions, installed file hashes and
-launcher. Explicit setup alone may repair an owned stale environment.
+launcher. Explicit setup alone may repair an owned stale environment. Local
+venv validation does not require matching filesystem ownership or private Unix
+permission bits, including on shared filesystems.
 
 `make clean` removes environments only from the current machine/user namespace;
 it still removes shared build artifacts and caches as before. The complete
@@ -92,7 +106,8 @@ and installs through APT.
 Capability validation requires the native libva encoder and decoder, libyuv,
 GTK OpenGL, common/server assets, X11 bindings, and Ubuntu Wayland modules in
 their owning packages. APT explicitly requests `libva-drm2`,
-`python3-opengl`, `python3-venv`, `dbus-daemon`, and `python3-dbus`;
+`python3-opengl`, `python3-venv`, `dbus-daemon`, `python3-dbus`, `python3-gi`,
+`xdg-desktop-portal`, and `xdg-desktop-portal-gtk`;
 post-install verification imports every
 required module. Any
 missing, duplicate, symlinked, or unsafe payload fails before mutation.
@@ -114,6 +129,21 @@ make live-preflight
 make live-test
 ```
 
+After a failure is fixed, resume the ordered matrix at the failed case instead
+of repeating the passed ones, and keep resuming until the matrix reaches its
+end. A resumed run skips earlier cases, so it cannot validate a change: finish
+with one complete `make live-test`. If that fails, resume from its failed case
+again and end with another complete run. Skipping the linger consent cases
+enables the fixture account's linger through one SSH login and the same sudo
+rule the consent case uses, because the later persistent cases require it.
+
+```bash
+make live-test LIVE_FROM=persistent
+```
+
+The cases run in this order: `linger-declined`, `linger`, `detach`, `abrupt`
+(four repetitions), `persistent`, `agent-notification`.
+
 The full test builds and verifies the wheel, excludes package source from its
 payload, clean-installs the wheel as the disposable client user, and proves
 that installed import before the real cases. It prepares the Xpra venv through
@@ -131,15 +161,56 @@ client kill, deliberate master closure, master kill and cancellation. They
 wait beyond the ordinary heartbeat lease with all connections closed, compare
 the same application/server PID and service token after each reconnect, and
 check cleanup after application exit with both zero and nonzero status.
+The same ordinary and persistent cases pass explicit application variables,
+including empty values and literal shell syntax, and compare the GUI fixture's
+observed environment on every attach and reconnect. Unit tests cover local value
+capture, helper isolation, custom executable search paths, and rejection of
+changed persistent environments.
+Unexpected TCP-listener failures include bounded address details.
+The target masks the package's `xpra.socket` and `xpra.service`; only SSH may
+listen on TCP.
+Ordinary abrupt master loss is repeated at the default log level within the
+same topology, with bounded process, owned-path, and shutdown-timeline diagnostics on
+failure. A separate real-pipe regression fills an open SSH-output pipe before
+group termination and verifies application cleanup and native journaling without
+reading that pipe; closed-pipe, partial-write, and bounded-queue cases are covered
+independently. Short-command output must remain complete when a reader briefly
+delays consumption. A successful repetition does not waive any later cleanup check.
 The same public GTK fixture exercises text/modifier input, both wheel axes,
 custom cursor pixels through XFixes, modal-dialog opening/keyboard dismissal, and
 notification delivery to a real freedesktop service on the disposable client's
 private bus. No Xpra implementation objects or test-only input options are
 used. The private remote notification bus retains its process identity across
 persistent reconnects and is gone after the owned application/session ends.
+The same topology checks portal notification delivery, selects a real remote
+file in the GTK portal dialog, rejects OpenURI through the private bus, and
+records all three owned portal process identities for cleanup verification.
 The client permits modal hints, but the fixture does not equate GTK's Wayland
 modal grab with X11 window-manager properties; compositor metadata correctness
 remains in the maintained fork.
+Keyboard dismissal waits for the remote dialog's observed GTK active state;
+local X11 mapping or focus alone does not acknowledge remote keyboard focus.
+
+Applications that draw their own notification windows are covered by
+lightweight probes derived from pinned upstream source, never by shipping the
+application or relying on a host installation. The agent probe reproduces the
+Wayland flow of Zed 1.20.2's agent notifications
+(`ConversationView::show_notification`, `AgentNotification::window_options`
+and GPUI's Wayland client). The conversation notifies only while its main
+window lacks `wl_keyboard` focus, and an open notification suppresses the
+next one. With `notify_when_agent_waiting: all_screens` it opens one
+borderless, transparent 450x72 top-level per output, without a parent, title
+or activation request, sharing the application's app ID. Zed's default
+`primary_screen` opens no window on Wayland, because GPUI reports no primary
+display there. Regaining main-window focus dismisses the notifications.
+The case parses the operator's command line (`--encoding-profile h264
+--network-profile gigabit_lan --persistent` with a home-relative application
+path) through the production parser. The client display runs the real xfwm4
+window manager and an unrelated local application that holds focus while the
+agent turn finishes. Every forwarded notification window must be viewable, on
+screen and topmost at its center, before and after a persistent reconnect.
+Without a render node, the H.264 request falls back to RGB, as it does on such
+a host.
 Both guests run real journald. The confined client adds only a bounded private
 runtime tmpfs; its journal daemon has no capabilities, and the product remains
 non-root. A container-only bounded journal policy retains the complete matrix

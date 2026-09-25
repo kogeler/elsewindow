@@ -19,11 +19,11 @@ from ssh_wrapper.connection import OpenSSHMaster, SSHMasterSettings
 from ssh_wrapper.errors import SSHError
 from ssh_wrapper.remote_process import BoundedTail, OwnedRemoteProcess
 
-from .config import SUPPORTED_CLIPBOARD_POLICIES, XpraConfig
+from .config import DEFAULT_ENCODING_PROFILE, SUPPORTED_CLIPBOARD_POLICIES, XpraConfig
+from .desktop import NOTIFICATION_PACKAGES, application_argv, probe_argv, probe_result
 from .journal import (
     PRIORITIES,
     Journal,
-    JournalError,
     XpraLogStream,
     remote_argv,
     xpra_environment,
@@ -81,9 +81,7 @@ SERVER_GUI_OPTIONS = (
 )
 CLIENT_GUI_OPTIONS = (
     *SERVER_GUI_OPTIONS,
-    "--mousewheel=on",
     "--keyboard-sync=yes",
-    "--modal-windows=yes",
     "--desktop-scaling=on",
     # The fork's notification presenter uses a helper from this client module.
     # Server-side tray forwarding remains explicitly disabled below.
@@ -129,6 +127,18 @@ def clipboard_options(policy: str) -> tuple[str, ...]:
     # The fork's client clipboard gate also isolates unrelated X11 features.
     # Apply only the symmetric server policy, not those test-only workarounds.
     return tuple(load_live_cli()["server"]["clipboard"][policy])
+
+
+def gui_options(role: str, notifications: bool) -> tuple[str, ...]:
+    options = CLIENT_GUI_OPTIONS if role == "client" else SERVER_GUI_OPTIONS
+    return tuple(
+        option
+        if notifications
+        else option.replace("--notifications=yes", "--notifications=no").replace(
+            "--system-tray=yes", "--system-tray=no"
+        )
+        for option in options
+    )
 
 
 def _translate_server_runtime_options(
@@ -244,8 +254,13 @@ def build_server_argv(
     clipboard: str,
     *,
     persistent: bool = False,
+    notifications: bool = True,
+    application_environment: tuple[tuple[str, str], ...] = (),
 ) -> tuple[str, ...]:
     """Build one production Wayland server command from the mirrored profile."""
+    child = application_argv(
+        application, notifications, application_environment=application_environment
+    )
     return (
         "env",
         f"XPRA_WAYLAND_GPU={_gpu_mode(encoding_profile)}",
@@ -253,11 +268,11 @@ def build_server_argv(
         "seamless",
         *_production_server_base_options(),
         f"--session-name={session_name}",
-        f"{'--start-child' if persistent else '--start-child-after-connect'}={shlex.join(application)}",
+        f"{'--start-child' if persistent else '--start-child-after-connect'}={shlex.join(child)}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
         *clipboard_options(clipboard),
-        *SERVER_GUI_OPTIONS,
+        *gui_options("server", notifications),
         *SERVER_SECURITY_OPTIONS,
     )
 
@@ -476,6 +491,7 @@ class XpraSession:
         )
         self.remote: OwnedRemoteProcess | None = None
         self.persistent: PersistentSession | None = None
+        self.persistent_enabled = config.persistent
         self.client: asyncio.subprocess.Process | None = None
         self.client_stdout = BoundedTail()
         self.client_stderr = BoundedTail()
@@ -483,16 +499,25 @@ class XpraSession:
         self._wrapper: Path | None = None
         self._remote_display: str | None = None
         self._remote_logs: list[RemoteLogChannel] = []
+        self.local_notifications = True
+        self.remote_notifications = True
+        self.client_encoding_profile = config.encoding_profile
+        self.server_encoding_profile = config.encoding_profile
 
     async def _subscribe_logs(self, session: str) -> None:
         channel = RemoteLogChannel(self.master, self.journal, session)
         self._remote_logs.append(channel)
         try:
             await channel.start()
-        except (OSError, LogTransportError) as error:
-            raise SSHError(
-                "remote_log_unavailable", "cannot subscribe to the remote session logs"
-            ) from error
+        except (OSError, LogTransportError):
+            await channel.close()
+            self._remote_logs.remove(channel)
+            self.journal.emit(
+                PRIORITIES["warning"],
+                "Remote log forwarding disabled for this connection: its private log "
+                "channel is unavailable. Check remote runtime-directory permissions; "
+                "no extra system package is required. Application lifetime is unchanged.",
+            )
 
     @staticmethod
     def _require_options(output: bytes, options: tuple[str, ...], side: str) -> None:
@@ -509,7 +534,7 @@ class XpraSession:
             ("--ssh=owned",),
             static_cli_options("client", "base"),
             network_profile(self.config.network_profile).client_options(),
-            production_transport_options("client", self.config.encoding_profile),
+            production_transport_options("client", self.client_encoding_profile),
             clipboard_options(self.config.clipboard),
             CLIENT_GUI_OPTIONS,
             CLIENT_SECURITY_OPTIONS,
@@ -520,10 +545,10 @@ class XpraSession:
             _production_server_base_options(),
             (
                 "--session-name=owned",
-                f"{'--start-child' if self.config.persistent else '--start-child-after-connect'}=owned",
+                f"{'--start-child' if self.persistent_enabled else '--start-child-after-connect'}=owned",
             ),
             static_cli_options("server", "lifecycle"),
-            production_transport_options("server", self.config.encoding_profile),
+            production_transport_options("server", self.server_encoding_profile),
             clipboard_options(self.config.clipboard),
             SERVER_GUI_OPTIONS,
             SERVER_SECURITY_OPTIONS,
@@ -634,11 +659,16 @@ class XpraSession:
         if help_status != 0:
             raise SSHError("xpra_incompatible", "local Xpra capability probe failed")
         self._require_options(stdout + stderr, self._local_required_options(), "local")
-        if production_encoding(self.config.encoding_profile) == "h264":
-            opengl_status, stdout, _stderr = await self._run_local(
-                [str(self.config.xpra_path), "opengl"],
-                OPENGL_CAPABILITY_TIMEOUT,
-            )
+        if production_encoding(self.client_encoding_profile) == "h264":
+            try:
+                opengl_status, stdout, _stderr = await self._run_local(
+                    [str(self.config.xpra_path), "opengl"],
+                    OPENGL_CAPABILITY_TIMEOUT,
+                )
+            except SSHError as error:
+                if error.code not in {"xpra_probe_timeout", "xpra_start_failed"}:
+                    raise
+                opengl_status, stdout = 1, b""
             properties = {}
             for line in stdout.decode("utf-8", errors="replace").splitlines():
                 key, separator, value = line.partition("=")
@@ -649,10 +679,68 @@ class XpraSession:
                 or properties.get("success") != "true"
                 or properties.get("safe") != "true"
             ):
-                raise SSHError(
-                    "xpra_incompatible",
-                    "local Xpra OpenGL renderer is unavailable or unsafe",
+                self._disable_video("local", "the public Xpra OpenGL check failed")
+
+    def _disable_video(self, side: str, reason: str) -> None:
+        self.client_encoding_profile = DEFAULT_ENCODING_PROFILE
+        if side == "remote":
+            self.server_encoding_profile = DEFAULT_ENCODING_PROFILE
+        self.journal.emit(
+            PRIORITIES["warning"],
+            f"H.264 acceleration disabled for this connection: {reason}; using the "
+            f"{DEFAULT_ENCODING_PROFILE} profile. On the {side} host, check GPU access "
+            "and install libva-drm2, python3-opengl and the appropriate VA-API driver "
+            "(mesa-va-drivers for supported AMD GPUs or intel-media-va-driver for "
+            "supported Intel GPUs on Debian/Ubuntu). No packages are installed automatically.",
+        )
+
+    async def _check_desktop_prerequisites(self, side: str) -> None:
+        argv = probe_argv(side)
+        try:
+            if side == "client":
+                status, output, _stderr = await self._run_local(
+                    list(argv), CAPABILITY_TIMEOUT
                 )
+            else:
+                status, output, _stderr = await self._run_mux(shlex.join(argv))
+            result = probe_result(status, output)
+        except (OSError, ValueError):
+            result = {"notifications": False, "render": False}
+        except SSHError as error:
+            if error.code not in {"xpra_probe_timeout", "xpra_start_failed"}:
+                raise
+            result = {"notifications": False, "render": False}
+        label = "local" if side == "client" else "remote"
+        if side == "client":
+            self.local_notifications = result["notifications"]
+        else:
+            self.remote_notifications = result["notifications"]
+        if not result["notifications"]:
+            advice = (
+                " A running desktop notification service is also required; "
+                "if your desktop does not provide one, install and start dunst."
+                if side == "client"
+                else ""
+            )
+            self.journal.emit(
+                PRIORITIES["warning"],
+                f"Notification delivery disabled for this connection: the {label} "
+                f"notification prerequisites are unavailable. On Debian/Ubuntu, install "
+                f"on the {label} host: {NOTIFICATION_PACKAGES}.{advice} "
+                "The application will continue without notification delivery.",
+            )
+        if (
+            not result["render"]
+            and production_encoding(
+                self.client_encoding_profile
+                if side == "client"
+                else self.server_encoding_profile
+            )
+            == "h264"
+        ):
+            self._disable_video(
+                label, f"no accessible DRM render device on the {label} host"
+            )
 
     async def _check_remote_capabilities(self) -> None:
         status, stdout, stderr = await self._run_mux(
@@ -680,9 +768,11 @@ class XpraSession:
         return build_server_argv(
             self.config.application,
             self.session_name,
-            self.config.encoding_profile,
+            self.server_encoding_profile,
             self.config.clipboard,
-            persistent=self.config.persistent,
+            persistent=self.persistent_enabled,
+            notifications=self.remote_notifications,
+            application_environment=self.config.application_environment,
         )
 
     def _capture_remote_display(self) -> None:
@@ -745,9 +835,11 @@ class XpraSession:
             f"--ssh={self._wrapper}",
             *static_cli_options("client", "base"),
             *network_profile(self.config.network_profile).client_options(),
-            *production_transport_options("client", self.config.encoding_profile),
+            *production_transport_options("client", self.client_encoding_profile),
             *clipboard_options(self.config.clipboard),
-            *CLIENT_GUI_OPTIONS,
+            *gui_options(
+                "client", self.local_notifications and self.remote_notifications
+            ),
             *CLIENT_SECURITY_OPTIONS,
         ]
 
@@ -929,15 +1021,13 @@ class XpraSession:
     async def run(self) -> int:
         """Start, attach, wait, and clean every owned process in order."""
         try:
-            try:
-                self.journal.open()
-            except JournalError as error:
-                raise SSHError("journal_unavailable", str(error)) from None
+            self.journal.open_optional()
             if self.config.log_level in {"debug", "debug-clipboard"}:
                 message = "debug logging is enabled on both hosts; system journals may contain clipboard contents and other sensitive data"
                 self.journal.emit(PRIORITIES["warning"], message)
             self.journal.emit(PRIORITIES["info"], "checking local Xpra capabilities")
             await self._check_local_capabilities()
+            await self._check_desktop_prerequisites("client")
             self.journal.emit(PRIORITIES["info"], "opening the owned SSH master")
             await self.master.start()
             self._wrapper = self.master.create_mux_wrapper("xpra-ssh")
@@ -949,18 +1039,64 @@ class XpraSession:
                     self.config.poll_interval,
                     log_level=self.config.log_level,
                     journal=self.journal,
+                    application_environment=self.config.application_environment,
                 )
+                if not await self.persistent.prepare(self.config.application):
+                    self.persistent = None
+                    self.persistent_enabled = False
+                    self.journal.flush()
+            if self.persistent is not None:
                 session_id = await self.persistent.identify(self.config.application)
                 # Finish the provisional observer before releasing startup logs
                 # under the stable, host/account-qualified persistent identity.
-                await self._remote_logs[-1].close()
-                self._remote_logs.pop()
+                if self._remote_logs:
+                    await self._remote_logs[-1].close()
+                    self._remote_logs.pop()
                 self.session_id = session_id
                 self.journal.flush(session_id)
                 await self._subscribe_logs(session_id)
             await self._check_remote_capabilities()
+            await self._check_desktop_prerequisites("server")
             if self.persistent is not None:
-                await self.persistent.start(self.config.application, self.server_argv())
+                features = {
+                    "notifications": self.remote_notifications,
+                    "encoding_profile": self.server_encoding_profile,
+                }
+                await self.persistent.start(
+                    self.config.application,
+                    self.server_argv(),
+                    requested_server=build_server_argv(
+                        self.config.application,
+                        self.session_name,
+                        self.config.encoding_profile,
+                        self.config.clipboard,
+                        persistent=True,
+                        application_environment=self.config.application_environment,
+                    ),
+                    server_features=features,
+                )
+                recorded = self.persistent.record.get("server_features")
+                if (
+                    not isinstance(recorded, dict)
+                    or set(recorded) != set(features)
+                    or type(recorded["notifications"]) is not bool
+                    or recorded["encoding_profile"]
+                    not in {DEFAULT_ENCODING_PROFILE, self.config.encoding_profile}
+                ):
+                    raise SSHError(
+                        "persistent_operation_failed",
+                        "invalid persistent feature policy",
+                    )
+                if recorded != features:
+                    self.journal.emit(
+                        PRIORITIES["warning"],
+                        "Resuming the existing session with its original optional server "
+                        "features; package changes take effect when a new session starts.",
+                    )
+                self.remote_notifications = recorded["notifications"]
+                self.server_encoding_profile = recorded["encoding_profile"]
+                if self.server_encoding_profile == DEFAULT_ENCODING_PROFILE:
+                    self.client_encoding_profile = DEFAULT_ENCODING_PROFILE
                 self.session_name = self.persistent.record["session_name"]
             else:
                 self.remote = OwnedRemoteProcess(

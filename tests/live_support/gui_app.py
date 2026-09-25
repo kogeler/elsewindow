@@ -7,16 +7,23 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
+import secrets
 import signal
 import sys
 from pathlib import Path
 
+from remote_fixture import (
+    application_environment,
+    bus_identity,
+    limit_cpus,
+    publish,
+    write_marker,
+)
+
 
 def main() -> int:
-    # Bound native graphics worker pools on high-core-count CI machines.
-    os.sched_setaffinity(0, sorted(os.sched_getaffinity(0))[:2])
+    limit_cpus()
     os.environ["GDK_BACKEND"] = "wayland"
     os.umask(0o077)
     import gi
@@ -54,27 +61,30 @@ def main() -> int:
     scroll.add_events(Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
     dialog_button = Gtk.Button(label="Open modal dialog")
     notify_button = Gtk.Button(label="Send notification")
+    portal_notify_button = Gtk.Button(label="Send portal notification")
+    portal_dialog_button = Gtk.Button(label="Open portal file dialog")
     widgets = {
         "entry": entry,
         "scroll": scroll,
         "dialog": dialog_button,
         "notify": notify_button,
+        "portal_notify": portal_notify_button,
+        "portal_dialog": portal_dialog_button,
     }
     for widget in widgets.values():
         box.pack_start(widget, False, False, 0)
-    bus_pid = int(os.environ["DBUS_SESSION_BUS_PID"])
-    bus_stat = Path(f"/proc/{bus_pid}/stat").read_text()
     state = {
+        "application_environment": application_environment(),
         "text": "",
         "scroll_x": 0.0,
         "scroll_y": 0.0,
-        "bus": {
-            "pid": bus_pid,
-            "start": bus_stat[bus_stat.rfind(")") + 2 :].split()[19],
-        },
     }
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    state["bus"], portal_error = bus_identity(bus, Gio, GLib)
+    if portal_error is not None:
+        state["portal_error"] = portal_error
 
-    def publish() -> None:
+    def update() -> None:
         state["positions"] = {
             name: list(
                 widget.translate_coordinates(
@@ -85,13 +95,11 @@ def main() -> int:
             )
             for name, widget in widgets.items()
         }
-        staged = observation.with_suffix(".pending")
-        staged.write_text(json.dumps(state), encoding="utf-8")
-        staged.replace(observation)
+        publish(observation, state)
 
     def changed(_entry: Gtk.Entry) -> None:
         state["text"] = entry.get_text()
-        publish()
+        update()
 
     def scrolled(_widget: Gtk.Widget, event: Gdk.EventScroll) -> bool:
         directions = {
@@ -103,7 +111,7 @@ def main() -> int:
         dx, dy = directions.get(event.direction, event.get_scroll_deltas()[1:])
         state["scroll_x"] += dx
         state["scroll_y"] += dy
-        publish()
+        update()
         return True
 
     def dialog(_button: Gtk.Button) -> None:
@@ -114,12 +122,17 @@ def main() -> int:
         def closed(child: Gtk.Dialog, _response: int) -> None:
             state["dialog"] = False
             child.destroy()
-            publish()
+            update()
+
+        def focused(child: Gtk.Dialog, _property) -> None:
+            state["dialog_active"] = child.is_active()
+            update()
 
         popup.connect("response", closed)
+        popup.connect("notify::is-active", focused)
         popup.show_all()
         state["dialog"] = True
-        publish()
+        update()
 
     def notify(_button: Gtk.Button) -> None:
         state["notification"] = False
@@ -152,7 +165,103 @@ def main() -> int:
             state["notification"] = True
         except GLib.Error as error:
             state["notification_error"] = error.message
-        publish()
+        update()
+
+    def portal_notify(_button: Gtk.Button) -> None:
+        try:
+            bus.call_sync(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.Notification",
+                "AddNotification",
+                GLib.Variant(
+                    "(sa{sv})",
+                    (
+                        "elsewindow-live",
+                        {
+                            "title": GLib.Variant("s", title + " Portal Notification"),
+                            "body": GLib.Variant(
+                                "s", "Portal notification reached the local desktop"
+                            ),
+                        },
+                    ),
+                ),
+                None,
+                Gio.DBusCallFlags.NO_AUTO_START,
+                5000,
+                None,
+            )
+            state["portal_notification"] = True
+        except GLib.Error as error:
+            state["portal_error"] = error.message
+        update()
+
+    def portal_response(_bus, _sender, _path, _interface, _signal, parameters) -> None:
+        response, results = parameters.unpack()
+        state["portal_response"] = response
+        state["portal_files"] = results.get("uris", [])
+        update()
+
+    bus.signal_subscribe(
+        "org.freedesktop.portal.Desktop",
+        "org.freedesktop.portal.Request",
+        "Response",
+        None,
+        None,
+        Gio.DBusSignalFlags.NONE,
+        portal_response,
+    )
+
+    def portal_dialog(_button: Gtk.Button) -> None:
+        state.pop("portal_response", None)
+        state.pop("portal_files", None)
+        try:
+            bus.call_sync(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+                "org.freedesktop.portal.FileChooser",
+                "OpenFile",
+                GLib.Variant(
+                    "(ssa{sv})",
+                    (
+                        "",
+                        title + " File Picker",
+                        {
+                            "handle_token": GLib.Variant(
+                                "s", "elsewindow_file_" + secrets.token_hex(8)
+                            ),
+                            "accept_label": GLib.Variant("s", "_Select"),
+                            "modal": GLib.Variant("b", False),
+                        },
+                    ),
+                ),
+                None,
+                Gio.DBusCallFlags.NO_AUTO_START,
+                5000,
+                None,
+            )
+        except GLib.Error as error:
+            state["portal_error"] = error.message
+        update()
+
+    try:
+        bus.call_sync(
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.OpenURI",
+            "OpenURI",
+            GLib.Variant("(ssa{sv})", ("", "https://example.invalid/", {})),
+            None,
+            Gio.DBusCallFlags.NO_AUTO_START,
+            1000,
+            None,
+        )
+        state["portal_open_uri_denied"] = False
+    except GLib.Error as error:
+        state["portal_open_uri_denied"] = (
+            Gio.DBusError.get_remote_error(error)
+            == "org.freedesktop.DBus.Error.AccessDenied"
+        )
 
     def poll() -> bool:
         nonlocal status
@@ -160,7 +269,7 @@ def main() -> int:
             status = int(exit_request.read_text(encoding="ascii").strip())
             application.quit()
             return False
-        publish()
+        update()
         return True
 
     entry.connect("changed", changed)
@@ -173,6 +282,8 @@ def main() -> int:
     )
     dialog_button.connect("clicked", dialog)
     notify_button.connect("clicked", notify)
+    portal_notify_button.connect("clicked", portal_notify)
+    portal_dialog_button.connect("clicked", portal_dialog)
     window.connect("destroy", lambda _window: application.quit())
     application.connect("activate", lambda _application: window.present())
     for selected in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -180,11 +291,7 @@ def main() -> int:
             GLib.PRIORITY_DEFAULT, selected, lambda: (application.quit(), False)[1]
         )
     window.show_all()
-    process_stat = Path(f"/proc/{os.getpid()}/stat").read_text()
-    start = process_stat[process_stat.rfind(")") + 2 :].split()[19]
-    marker.write_text(
-        f"{os.getpid()} {start} {os.environ['WAYLAND_DISPLAY']}\n", encoding="ascii"
-    )
+    write_marker(marker)
     GLib.timeout_add(100, poll)
     try:
         application.run(["elsewindow-live-app"])

@@ -127,6 +127,9 @@ REQUIRED_APT_PACKAGES: Final = (
     "python3-venv",
     "dbus-daemon",
     "python3-dbus",
+    "python3-gi",
+    "xdg-desktop-portal",
+    "xdg-desktop-portal-gtk",
 )
 PYTHON_PACKAGE_ROOT: Final = "usr/lib/python3/dist-packages/xpra"
 CPYTHON_EXTENSION: Final = r"\.cpython-[0-9]+-x86_64-linux-gnu\.so"

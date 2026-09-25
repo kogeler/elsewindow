@@ -6,6 +6,72 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+## [0.2.1] - 2026-09-08
+
+### Added
+
+- Include the standard desktop portal and GTK backend in explicit system-package
+  preparation and the release-backed disposable images. Startup never installs
+  system packages.
+- Own a private foreground desktop portal, GTK backend and transient permission
+  store for remote file dialogs and portal notifications. OpenURI and unrelated
+  desktop portal methods remain disabled.
+- Prevent repeated child-start requests from launching a second application or
+  competing portal helpers within the same owned session.
+- Add repeatable `--env NAME=VALUE` and `--env NAME` application overrides for
+  ordinary and persistent sessions. Preserve literal and empty values, isolate
+  overrides from session helpers, and require matching values on persistent
+  reconnects.
+- Document that Zed's default `notify_when_agent_waiting` opens no agent
+  notification window in any Wayland session, including Elsewindow's, and that
+  `all_screens` delivers them as forwarded windows.
+- Cover application-drawn agent notification windows in the live test with a
+  lightweight probe of Zed's Wayland flow, the operator's persistent H.264
+  `gigabit_lan` command line, and a real xfwm4 desktop across a persistent
+  reconnect.
+- Resume the ordered live matrix at a fixed failure with
+  `make live-test LIVE_FROM=CASE`, and run selected tests without the coverage
+  gate with `make test-focused TESTS=...`. Only a complete live run validates a
+  change.
+
+### Changed
+
+- Update the published SSH runtime dependency through its single requirements
+  input. Derive environment, lock, clean-install, standalone and live identity
+  checks from that input instead of maintaining duplicate version constants.
+- Missing journald no longer prevents ordinary or persistent application startup;
+  warn with setup guidance and retain terminal output and the remote log relay.
+- Check optional notification and GPU prerequisites on both hosts. Missing
+  support disables delivery or selects RGB for this connection with explicit
+  package guidance; absent portal services never prevent application startup.
+- Unavailable persistence or declined linger falls back to an ordinary session
+  only when no persistent state is recorded, with a warning about disconnect
+  cleanup. Never replace or duplicate an existing persistent application.
+- Synchronized the maintained fork's client wheel default and pointer diagnostics
+  without duplicating the mirrored wheel option in the session policy.
+
+### Fixed
+
+- Prevent an open but unread SSH output pipe from blocking ordinary remote
+  shutdown. Bound raw-output queues, retain native journal processing, and report
+  dropped bytes without postponing owned application cleanup.
+- Wait for the remote dialog's actual focus before sending its dismissal key
+  in the live GUI test. Repeat abrupt master loss and retain bounded process,
+  owned-path and shutdown-journal evidence on cleanup failure.
+- Allow local Xpra environment preparation, reuse, and startup on shared
+  filesystems with mapped ownership or broader Unix permissions.
+- Use the same resolved Xpra executable for preparation, diagnosis, and session
+  startup when PATH contains symbolic links. Allow longer installed-file checks
+  on shared storage and report timeouts without treating them as stale
+  environments or reinstalling dependencies.
+- Read installed file inventories directly with bounded concurrent reads during
+  Xpra validation to avoid repeated filesystem metadata scans and detect missing
+  package files.
+- Consume the canonical Xpra client modal-window default from the mirrored YAML
+  instead of duplicating it in Python.
+- Mask the current packaged Xpra socket and service in the disposable target so
+  its only TCP listener is SSH.
+
 ## [0.2.0] - 2026-09-05
 
 ### Added
