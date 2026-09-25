@@ -19,6 +19,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/bash box \
         xauth \
         xdotool \
         xfonts-base \
+        xfwm4 \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 

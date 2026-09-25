@@ -457,9 +457,9 @@ six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
     # via python-dateutil
-ssh-wrapper==0.1.0 \
-    --hash=sha256:0596fce059676285aef609aadebe999d272d4e5140bf469fddedc965df4968f2 \
-    --hash=sha256:520d9bee8b547428c1fae29e7456d5e4f70329357c6f470e71afef500cd3990a
+ssh-wrapper==0.1.1 \
+    --hash=sha256:3791f61e202e86f045d9f5494053b6a948c1fb3eeb520c438be9d114179f22df \
+    --hash=sha256:93874d7c0cf7fed017d0614d622fdbea71f6c3d30594b3ce332b74b3aaa0f2ff
     # via -r requirements.in
 urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \

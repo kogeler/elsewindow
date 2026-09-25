@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from tools.runtime_dependency import runtime_version
 from tools.smoke_xpra_runtime import smoke_xpra_runtime
 
 
@@ -49,6 +50,7 @@ def smoke(artifact: Path, *, root: Path, wheels: Path) -> None:
     if not artifact.is_file() or not os.access(artifact, os.X_OK):
         raise StandaloneSmokeError(f"standalone is not executable: {artifact}")
     version = (root / ".version").read_text(encoding="utf-8").strip()
+    wrapper_version = runtime_version(root)
     with tempfile.TemporaryDirectory(prefix="elsewindow-standalone-smoke-") as raw:
         temporary = Path(raw)
         hostile = temporary / "hostile"
@@ -108,12 +110,13 @@ def smoke(artifact: Path, *, root: Path, wheels: Path) -> None:
             environment=missing_environment,
             expected=1,
         )
-        if "ssh-wrapper: 0.1.0" not in diagnosis.stdout:
+        if f"ssh-wrapper: {wrapper_version}" not in diagnosis.stdout.splitlines():
             raise StandaloneSmokeError("bundled ssh-wrapper identity differs")
         for resource in (
             "live-cli.yml",
             "profiles.yml",
             "_persistent_agent.py",
+            "desktop.py",
             "journal.py",
             "session_bus.py",
             "log_transport.py",

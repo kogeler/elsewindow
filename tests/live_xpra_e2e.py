@@ -23,15 +23,24 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from ssh_wrapper.connection import ConnectionSpec
 from ssh_wrapper.errors import SSHError
 
+from elsewindow.cli import build_parser
 from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
 from elsewindow.live_config import DEFAULT_ENCODING_PROFILE, load_network_profiles
 from elsewindow.session import XpraSession, build_xpra_command_argv
 from elsewindow.xpra_runtime import prepared_launcher
+from tests.live_support.agent_notification import (
+    LocalDesktop,
+    verify_agent_notification,
+)
 from tests.live_support.gui import application_state, verify_gui_defaults
 from tests.live_support.journal import LIVE_LOG_LEVELS
 from tests.live_support.process import LIVE_EVIDENCE_PREFIX, TARGET_ALIAS
 from tests.live_support.xpra_target import (
     ABRUPT_MARKER,
+    AGENT_CASE,
+    AGENT_MARKER,
+    AGENT_PROBE,
+    APPLICATION_ENVIRONMENT,
     OWNED_MARKER,
     OWNED_TITLE,
     PERSISTENT_DISCONNECTS,
@@ -42,6 +51,15 @@ from tests.live_support.xpra_target import (
 ATTACH_TIMEOUT = 60.0
 CLEANUP_TIMEOUT = 20.0
 LIVE_DIAGNOSTIC_CHARACTERS = 8 * 1024
+# The operator's Zed invocation; the probe replaces only the application argv.
+AGENT_OPERATOR_OPTIONS = (
+    "--encoding-profile",
+    "h264",
+    "--network-profile",
+    "gigabit_lan",
+    "--persistent",
+)
+AGENT_NOTIFY_MODE = "all_screens"
 
 
 def verify_packaged_product() -> None:
@@ -60,7 +78,14 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--case",
-        choices=("detach", "abrupt", "linger-declined", "linger", "persistent"),
+        choices=(
+            "detach",
+            "abrupt",
+            "linger-declined",
+            "linger",
+            "persistent",
+            AGENT_CASE,
+        ),
         required=True,
     )
     parser.add_argument("--ssh-path", type=Path, required=True)
@@ -78,6 +103,7 @@ def session_config(arguments: argparse.Namespace) -> XpraConfig:
     return XpraConfig(
         connection=ConnectionSpec.from_alias(TARGET_ALIAS),
         application=(REMOTE_APP, marker, OWNED_TITLE),
+        application_environment=APPLICATION_ENVIRONMENT,
         encoding_profile=DEFAULT_ENCODING_PROFILE,
         network_profile=load_network_profiles()[0],
         clipboard=DEFAULT_CLIPBOARD_POLICY,
@@ -96,9 +122,45 @@ def session_config(arguments: argparse.Namespace) -> XpraConfig:
     )
 
 
+def agent_session_config(arguments: argparse.Namespace) -> XpraConfig:
+    """Parse the operator's command line with only live-topology timing added."""
+    timing = session_config(arguments)
+    config = XpraConfig.from_namespace(
+        build_parser().parse_args(
+            [
+                "--ssh-alias",
+                TARGET_ALIAS,
+                *AGENT_OPERATOR_OPTIONS,
+                f"--log-level={timing.log_level}",
+                f"--connect-timeout={timing.connect_timeout}",
+                f"--ready-timeout={timing.ready_timeout}",
+                f"--probe-timeout={timing.probe_timeout}",
+                f"--poll-interval={timing.poll_interval}",
+                f"--heartbeat-interval={timing.heartbeat_interval}",
+                f"--lease-timeout={timing.lease_timeout}",
+                f"--cleanup-grace={timing.grace_timeout}",
+                "--",
+                AGENT_PROBE,
+                AGENT_MARKER,
+                OWNED_TITLE,
+                AGENT_NOTIFY_MODE,
+            ]
+        )
+    )
+    if (config.ssh_path, config.false_path, config.xpra_path) != (
+        timing.ssh_path,
+        timing.false_path,
+        timing.xpra_path,
+    ):
+        raise RuntimeError("the production parser resolved different local programs")
+    return config
+
+
 def case_marker(case: str) -> str:
     if case == "abrupt":
         return ABRUPT_MARKER
+    if case == AGENT_CASE:
+        return AGENT_MARKER
     return OWNED_MARKER if case == "detach" else PERSISTENT_MARKER
 
 
@@ -208,7 +270,10 @@ async def verify_no_remote_tcp_listener(
         line for line in listeners.splitlines() if expected_suffix not in f"{line} "
     ]
     if unexpected or "15000" in listeners:
-        raise RuntimeError("the Xpra target exposes an unexpected TCP listener")
+        details = repr(unexpected or listeners.splitlines())[:1024]
+        raise RuntimeError(
+            f"the Xpra target exposes an unexpected TCP listener: {details}"
+        )
 
 
 async def local_window_state(session: XpraSession) -> tuple[bool, str]:
@@ -296,6 +361,11 @@ async def wait_for_attach(
                 and state["pixels_sent"]
                 and state["local_window"]
             ):
+                observation = await application_state(session, marker)
+                if observation.get("application_environment") != dict(
+                    session.config.application_environment
+                ):
+                    raise RuntimeError("the remote application environment changed")
                 verify_master_argv(session)
                 await verify_no_remote_tcp_listener(session, target_ssh_port)
                 return
@@ -366,7 +436,12 @@ async def persistent_identity(session: XpraSession, marker: str) -> dict[str, ob
     app_pid = stdout.decode().split()[0]
     bus = (await application_state(session, marker))["bus"]
     unit = f"elsewindow-{record['key']}.service"
-    for pid in (app_pid, str(record["xpra_pid"]), str(bus["pid"])):
+    for pid in (
+        app_pid,
+        str(record["xpra_pid"]),
+        str(bus["pid"]),
+        *(str(service["pid"]) for service in bus["services"]),
+    ):
         status, cgroup, _stderr = await session._run_mux(
             shlex.join(("cat", f"/proc/{pid}/cgroup"))
         )
@@ -443,36 +518,101 @@ async def concurrent_session(
         await cancel_driver(task)
 
 
+async def run_agent_case(arguments: argparse.Namespace) -> dict[str, object]:
+    """Resume the operator's persistent command and finish agent turns."""
+    config = agent_session_config(arguments)
+    sessions: list[str] = []
+    provisional_sessions: list[str] = []
+    displays: list[str] = []
+    buses: list[dict] = []
+    notifications: list[dict] = []
+    identity: dict[str, object] | None = None
+    desktop: LocalDesktop | None = None
+    try:
+        for mode in ("detach", "exit-zero"):
+            session = XpraSession(config)
+            initial_id = session.session_id
+            task = asyncio.create_task(session.run())
+            try:
+                await wait_for_attach(
+                    session,
+                    task,
+                    marker=AGENT_MARKER,
+                    verify_local_window=arguments.verify_local_window,
+                    target_ssh_port=arguments.target_ssh_port,
+                )
+                display = session._remote_display
+                if display is None or session.persistent is None:
+                    raise RuntimeError(
+                        "the operator command did not attach persistently"
+                    )
+                if session.session_id != initial_id:
+                    provisional_sessions.append(initial_id)
+                if sessions and session.session_id != sessions[0]:
+                    raise RuntimeError(
+                        "persistent reconnect changed the shared log identity"
+                    )
+                sessions.append(session.session_id)
+                displays.append(display)
+                current = await persistent_identity(session, AGENT_MARKER)
+                if identity is not None and current != identity:
+                    raise RuntimeError(
+                        "reconnect replaced the running application or server"
+                    )
+                identity = current
+                if current["bus"] not in buses:
+                    buses.append(current["bus"])
+                if desktop is None:
+                    desktop = LocalDesktop(session)
+                    await desktop.start()
+                desktop.session = session
+                notifications.append(
+                    await verify_agent_notification(
+                        session, desktop, AGENT_MARKER, OWNED_TITLE
+                    )
+                )
+                if mode == "detach":
+                    await disconnect(session, task, mode)
+                    await asyncio.sleep(config.lease_timeout + config.grace_timeout + 1)
+                else:
+                    await exit_application(session, task, AGENT_MARKER, 0)
+            except Exception as error:
+                print_session_diagnostics(session)
+                raise RuntimeError(f"{AGENT_CASE}/{mode}: {error}") from error
+            finally:
+                await cancel_driver(task)
+    finally:
+        if desktop is not None:
+            await desktop.close()
+    return {
+        "declined": False,
+        "display": displays[-1],
+        "displays": displays,
+        "identity": identity,
+        "connections": len(sessions),
+        "sessions": sessions,
+        "provisional_sessions": provisional_sessions,
+        "log_level": config.log_level,
+        "buses": buses,
+        "notifications": notifications,
+    }
+
+
 async def run_case(
     arguments: argparse.Namespace, notifications: Path
 ) -> dict[str, object]:
+    if arguments.case == AGENT_CASE:
+        return await run_agent_case(arguments)
     config = session_config(arguments)
     marker = case_marker(arguments.case)
     sessions = []
     provisional_sessions = []
     buses = []
-    if arguments.case == "linger-declined":
-        session = XpraSession(config)
-        initial_id = session.session_id
-        try:
-            await session.run()
-        except SSHError as error:
-            if error.code == "persistent_linger_declined":
-                return {
-                    "declined": True,
-                    "sessions": [session.session_id],
-                    "provisional_sessions": [initial_id]
-                    if initial_id != session.session_id
-                    else [],
-                    "log_level": config.log_level,
-                }
-            raise
-        raise RuntimeError("declining linger unexpectedly started a session")
     modes = (
         (*PERSISTENT_DISCONNECTS, "exit-zero", "exit-error")
         if arguments.case == "persistent"
         else ("exit-zero",)
-        if arguments.case == "linger"
+        if arguments.case in {"linger", "linger-declined"}
         else (arguments.case,)
     )
     identity: dict[str, object] | None = None
@@ -495,6 +635,12 @@ async def run_case(
             displays.append(display)
             if session.session_id != initial_id:
                 provisional_sessions.append(initial_id)
+            if arguments.case == "linger-declined" and (
+                session.persistent is not None or session.session_id != initial_id
+            ):
+                raise RuntimeError(
+                    "declining linger did not select an ordinary session"
+                )
             if config.persistent and sessions and session.session_id != sessions[0]:
                 raise RuntimeError(
                     "persistent reconnect changed the shared log identity"
@@ -529,7 +675,7 @@ async def run_case(
                 sessions.append(other_id)
                 displays.append(other_display)
                 buses.append(other_bus)
-            if config.persistent:
+            if session.persistent is not None:
                 current = await persistent_identity(session, marker)
                 if identity is not None:
                     if mode == "exit-error":
@@ -561,15 +707,16 @@ async def run_case(
                 )
             else:
                 await disconnect(session, task, mode)
-            if config.persistent:
+            if session.persistent is not None:
                 # Exceed the ordinary ownership lease with every SSH channel gone.
                 await asyncio.sleep(config.lease_timeout + config.grace_timeout + 1)
-        except Exception:
+        except Exception as error:
             print_session_diagnostics(session)
-            raise
+            raise RuntimeError(f"{arguments.case}/{mode}: {error}") from error
         finally:
             await cancel_driver(task)
     return {
+        "declined": arguments.case == "linger-declined",
         "display": displays[-1],
         "displays": displays,
         "identity": identity,

@@ -32,7 +32,7 @@ from .process import (
     podman_exec,
 )
 from .topology import create_internal_network, provision_target
-from .xpra import run_xpra_matrix
+from .xpra import LIVE_CASES, run_xpra_matrix
 
 
 def parse_arguments(argv: list[str] | None = None) -> Arguments:
@@ -42,11 +42,17 @@ def parse_arguments(argv: list[str] | None = None) -> Arguments:
     parser.add_argument("--target-image", required=True)
     parser.add_argument("--client-image", required=True)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument(
+        "--from-case",
+        choices=LIVE_CASES,
+        help="resume after a fixed failure; finish with one complete run",
+    )
     parsed = parser.parse_args(argv)
     return Arguments(
         target_image=parsed.target_image,
         client_image=parsed.client_image,
         preflight_only=parsed.preflight_only,
+        from_case=parsed.from_case,
     )
 
 
@@ -96,10 +102,15 @@ def run_live(arguments: Arguments, key: KeyMaterial, resources: LiveResources) -
             test_dir,
         )
         verify_ssh_settings(resources, connection, client)
-        run_xpra_matrix(resources, target, client)
+        run_xpra_matrix(resources, target, client, arguments.from_case)
         verify_key_postconditions(key, private_before, public_before)
+        completion = (
+            "complete"
+            if arguments.from_case is None
+            else f"tail from {arguments.from_case} passed; run it once completely"
+        )
         print(
-            "live: automatic Xpra matrix complete; "
+            f"live: automatic Xpra matrix {completion}; "
             f"host key {connection.observed_host_key}; ephemeral key unchanged",
             file=sys.stderr,
         )

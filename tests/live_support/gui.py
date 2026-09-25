@@ -83,6 +83,29 @@ async def application_state(session: XpraSession, marker: str) -> dict:
     return value
 
 
+async def focus_dialog(session: XpraSession, marker: str) -> bool:
+    """Wait for remote GTK focus, not just the local window's mapping."""
+    status, output, _stderr = await session._run_local(
+        [
+            "xdotool",
+            "search",
+            "--onlyvisible",
+            "--name",
+            "^" + OWNED_TITLE + " Dialog$",
+        ],
+        5,
+    )
+    if status or len(output.split()) != 1:
+        return False
+    status, _stdout, _stderr = await session._run_local(
+        ["xdotool", "windowfocus", "--sync", output.strip().decode()], 5
+    )
+    if status:
+        raise RuntimeError("the public dialog focus request failed")
+    state = await application_state(session, marker)
+    return state.get("dialog") is True and state.get("dialog_active") is True
+
+
 async def verify_gui_defaults(
     session: XpraSession, marker: str, notifications: Path
 ) -> dict:
@@ -127,6 +150,12 @@ async def verify_gui_defaults(
         )
     window = ids[0].decode()
     state = await application_state(session, marker)
+    if state.get("portal_error") or len(state["bus"].get("services", [])) != 3:
+        raise RuntimeError(
+            f"owned portal services are unavailable: {state.get('portal_error', 'missing process identities')}"
+        )
+    if state.get("portal_open_uri_denied") is not True:
+        raise RuntimeError("the private bus did not reject OpenURI")
 
     async def point(name: str, *, click: bool = False) -> None:
         x, y = (await application_state(session, marker))["positions"][name]
@@ -185,30 +214,84 @@ async def verify_gui_defaults(
         )
 
     await wait("a remote notification on the local desktop bus", notified)
-    await point("dialog", click=True)
+    await point("portal_notify", click=True)
 
-    async def dialog() -> bool:
+    async def portal_notified() -> bool:
+        current = await application_state(session, marker)
+        if current.get("portal_error"):
+            raise RuntimeError(current["portal_error"])
+        return any(
+            record["summary"] == OWNED_TITLE + " Portal Notification"
+            and record["body"] == "Portal notification reached the local desktop"
+            for record in json.loads(notifications.read_bytes())[notification_count:]
+        )
+
+    await wait("a portal notification on the local desktop bus", portal_notified)
+    await point("portal_dialog", click=True)
+
+    async def portal_dialog_open() -> bool:
+        current = await application_state(session, marker)
+        if current.get("portal_error"):
+            raise RuntimeError(current["portal_error"])
         status, output, _stderr = await session._run_local(
             [
                 "xdotool",
                 "search",
                 "--onlyvisible",
                 "--name",
-                "^" + OWNED_TITLE + " Dialog$",
+                "^" + OWNED_TITLE + " File Picker$",
             ],
             5,
         )
         if status or len(output.split()) != 1:
             return False
         popup = output.strip().decode()
-        if not (await application_state(session, marker)).get("dialog"):
-            return False
-        await command("xdotool", "windowfocus", "--sync", popup, "key", "Escape")
+        await command(
+            "xdotool",
+            "mousemove",
+            "--sync",
+            "--window",
+            popup,
+            "200",
+            "150",
+            "click",
+            "1",
+        )
+        await command(
+            "xdotool",
+            "windowfocus",
+            "--sync",
+            popup,
+            "key",
+            "--clearmodifiers",
+            "ctrl+l",
+        )
+        await command("xdotool", "sleep", "0.3")
+        await command("xdotool", "type", "--delay", "100", "--clearmodifiers", marker)
+        await command("xdotool", "sleep", "0.5")
+        await command("xdotool", "key", "--clearmodifiers", "Return")
+        await command("xdotool", "sleep", "0.5", "key", "--clearmodifiers", "alt+s")
         return True
+
+    await wait("the portal file dialog", portal_dialog_open)
+
+    async def portal_selected() -> bool:
+        current = await application_state(session, marker)
+        return current.get("portal_response") == 0 and current.get("portal_files") == [
+            Path(marker).as_uri()
+        ]
+
+    await wait("the selected remote file from the portal", portal_selected)
+    await command("xdotool", "windowfocus", "--sync", window)
+    await point("dialog", click=True)
+
+    async def dialog() -> bool:
+        return await focus_dialog(session, marker)
 
     # GTK's Wayland modal grab is not an X11 window-manager hint. Check the
     # public dialog interaction, leaving compositor metadata to the fork.
     await wait("the application's modal dialog", dialog)
+    await command("xdotool", "key", "--clearmodifiers", "Escape")
 
     async def dialog_closed() -> bool:
         return (await application_state(session, marker)).get("dialog") is False

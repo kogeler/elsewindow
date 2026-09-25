@@ -18,6 +18,7 @@ from elsewindow.log_transport import SESSION
 from elsewindow.persistent import LINGER_PROMPT
 
 from .process import LiveFailure, LiveResources, checked
+from .xpra_target import AGENT_CASE
 
 LIVE_LOG_LEVELS = {
     "linger-declined": DEFAULT_LOG_LEVEL,
@@ -25,6 +26,8 @@ LIVE_LOG_LEVELS = {
     "detach": "info",
     "abrupt": DEFAULT_LOG_LEVEL,
     "persistent": "info",
+    # The operator's command keeps the default level.
+    AGENT_CASE: DEFAULT_LOG_LEVEL,
 }
 MAX_JOURNAL_RECORDS = 50_000
 

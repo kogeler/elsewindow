@@ -45,6 +45,7 @@ the current CLI parser by the test suite.
 | `--host` | — | Select a direct remote hostname or IP address; requires `--user`. |
 | `--user` | — | Select the remote login user for `--host`. |
 | `--port` | `22` | Select the direct SSH port; alias ports come from OpenSSH configuration. |
+| `--env` | — | Set an application variable with `NAME=VALUE`, or copy a named local variable; repeat as needed. |
 | `--encoding-profile` | `rgb` | Select a reviewed pixel transport profile. |
 | `--network-profile` | `gigabit_lan` | Select the attaching client's quality and network policy. |
 | `--clipboard` | `both` | Select clipboard synchronization on both peers. |
@@ -57,6 +58,38 @@ the current CLI parser by the test suite.
 | `--heartbeat-interval` | `10` s | Set the ordinary session's ownership-heartbeat interval. |
 | `--lease-timeout` | `45` s | Set how long an ordinary remote supervisor may wait without a valid heartbeat. |
 | `--cleanup-grace` | `5` s | Allow graceful termination of the ordinary remote process group before forced cleanup. |
+
+## Application Environment
+
+Repeat `--env NAME=VALUE` to set variables for the remote application, or use
+`--env NAME` to copy an existing local variable before opening SSH:
+
+```bash
+elsewindow --ssh-alias workstation \
+  --env APP_MODE=debug --env 'APP_LABEL=one two' --env LANG -- xterm
+```
+
+`--env NAME=` sets an empty value. An unset local name is an error. Repeated
+names use the last assignment; names are case-sensitive and must match
+`[A-Za-z_][A-Za-z0-9_]*`. Values preserve whitespace, newlines, equals signs, and
+Unicode. The local shell's normal quoting applies; Elsewindow does not expand
+variables or execute shell syntax remotely. Options after `--` remain application
+arguments.
+
+The overrides affect only the application and its descendants. They supplement
+its remote environment without changing SSH, Xpra, the supervisor, or desktop
+helpers. `PATH` also controls remote lookup of an executable without a slash.
+`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and names beginning with `DBUS_`
+or `ELSEWINDOW_` are reserved for the owned session. Up to 128 variables and
+8,192 UTF-8 bytes are accepted, counting each name, value, equals sign, and
+terminating NUL; NUL bytes inside values are invalid.
+
+For `--persistent`, the initial explicit variable set is part of the recorded
+launch configuration. Reconnect with the same names and values; their order does
+not matter. Changing or omitting a recorded override produces
+`persistent_environment_mismatch`. Exit the application before starting it with
+different values. The session key remains based on the resolved application argv.
+Setup and diagnosis cannot be combined with `--env`.
 
 ## Informational Commands
 
@@ -102,6 +135,11 @@ and native additions separate. A missing or invalid machine ID is an error.
 an explicit override must not be shared between hosts. Ordinary
 startup only validates the prepared environment and fails with setup guidance
 if its current lock, system interpreter, or installed package bytes differ.
+Setup, diagnosis, and session startup resolve symbolic links to the same system
+Xpra executable. Installed-file validation allows up to three minutes for slow
+shared storage. A validation timeout is reported separately from a stale
+environment and does not trigger reinstallation; retry the command once storage
+is responsive.
 
 ## SSH Authority
 
@@ -159,7 +197,9 @@ alpha-capable and lossless alternatives declared by the fork.
 
 H.264 requires usable DRM render nodes and hardware-specific VA-API drivers
 on both hosts. Before SSH startup, Elsewindow checks the public local
-`xpra opengl` result. Detailed codec, alpha, GPU, and application acceptance
+`xpra opengl` result. Missing local acceleration selects the RGB client profile;
+an inaccessible remote render device selects RGB on both peers. Each fallback
+warns with driver/package guidance and does not install anything. Detailed codec, alpha, GPU, and application acceptance
 belongs to the [maintained fork](xpra.md#why-the-maintained-xpra-fork-is-required).
 
 ### Network Profile
@@ -206,6 +246,55 @@ elsewindow --ssh-alias workstation --encoding-profile h264 \
 
 ## Session Lifetime
 
+Native journal recording is optional. If journald is unavailable on either host,
+Elsewindow warns with the `systemd` package and service setup guidance and keeps
+the application, terminal output, and owned remote log relay running.
+
+### Optional Desktop Features
+
+`--diagnose` reports local optional support once the essential local setup is
+valid. Missing optional support does not make diagnosis fail. Remote checks
+run after the single SSH authentication; portal startup is checked once the
+remote display exists.
+
+Every invocation checks notification prerequisites on both hosts. Missing local
+desktop notification service/bindings or remote D-Bus bindings disables delivery
+for that connection with a warning identifying the affected host and the
+Debian/Ubuntu packages: `dbus-daemon python3-dbus python3-gi`. The local desktop
+must also provide a running notification service; `dunst` is an option for a
+desktop without one. Do-not-disturb and presentation permissions remain local
+desktop policy.
+
+Some applications draw their own notification windows instead of calling the
+desktop notification service. Zed's agent notifications are such windows, and
+the remote backend is always Wayland. With Zed's default
+`"notify_when_agent_waiting": "primary_screen"`, Zed opens no notification
+window in any Wayland session: its Wayland backend reports no primary display,
+attention requests have no Wayland effect, and the completion sound is not
+forwarded. Set this in the remote Zed settings:
+
+```json
+{ "agent": { "notify_when_agent_waiting": "all_screens" } }
+```
+
+Zed then opens one small borderless window per remote output. Elsewindow
+forwards it like any other application window, and the local window manager
+places it; Wayland does not let Zed choose the corner of the screen.
+
+Remote portal file dialogs and portal notifications additionally require
+`xdg-desktop-portal xdg-desktop-portal-gtk python3-gi`. If these are missing or
+cannot start on the private session bus/display, Elsewindow warns and starts
+the application without portal support. Ordinary freedesktop notifications do
+not require the portal packages. File dialogs select remote files. OpenURI and
+local file/URL opening remain disabled.
+
+The clipboard, cursor, wheel, keyboard-state, scaling and modal-window features
+use the maintained Xpra packages and GTK already required to display the
+application; they do not require `xclip`, `wl-clipboard`, a portal, or a desktop
+notification daemon. SSH, Python, the verified Xpra installation, the graphical
+display, and session-ownership checks remain essential: without them there is
+no usable owned GUI session to continue.
+
 ### Persistent
 
 `--persistent` starts or resumes an owned transient user systemd service.
@@ -224,6 +313,10 @@ preserved, including virtualenv interpreters and links to versioned programs.
 Names without a slash are resolved on remote `PATH` before deriving the key.
 
 An existing session must retain its encoding, clipboard, and logging policy.
+Optional remote feature decisions also remain fixed for that running session;
+installing or removing packages affects new sessions, not the existing server.
+Reconnect still checks current local capabilities and can disable local delivery
+or use RGB without replacing the persistent application.
 An incompatible reconnect is refused without stopping or replacing it; use
 the original settings or exit the application first. The network profile may
 change because it applies only to the attaching client. Services created
@@ -233,7 +326,14 @@ The remote account must have a working user systemd manager and linger.
 Elsewindow checks this on every invocation. If linger is off, the invoking
 terminal must supply exact `y` or `yes` before Elsewindow enables it for that
 account, using remote `sudo` when required, and verifies the result. A refusal
-or missing terminal starts no application and leaves the account unchanged.
+or missing terminal leaves the account unchanged. If persistence prerequisites
+are unavailable or consent is not granted, a new application runs as an ordinary
+session with an explicit warning: disconnecting the client or SSH will stop it.
+On Debian/Ubuntu the relevant remote packages are `systemd libpam-systemd`;
+a working user manager and approved linger are also required.
+Recorded persistent state prevents this fallback, including when its service
+cannot be inspected: restore the prerequisites to resume it. Elsewindow never
+starts a duplicate application to work around an uncertain existing session.
 Linger remains enabled afterwards and affects the account's other user
 services too; ask the administrator to disable it when no longer wanted.
 

@@ -23,6 +23,7 @@ from ssh_wrapper.errors import SSHError
 
 import elsewindow.session as session_module
 from elsewindow.config import DEFAULT_CLIPBOARD_POLICY, XpraConfig
+from elsewindow.desktop import application_argv
 from elsewindow.journal import xpra_environment
 from elsewindow.live_config import (
     DEFAULT_ENCODING_PROFILE,
@@ -36,6 +37,25 @@ from elsewindow.live_config import (
     static_cli_options,
 )
 from elsewindow.session import XpraSession, build_xpra_command_argv
+from tests.live_xpra_e2e import verify_no_remote_tcp_listener
+
+
+@pytest.mark.asyncio
+async def test_live_listener_failure_identifies_unexpected_ports() -> None:
+    class Session:
+        async def _run_mux(self, command: str) -> tuple[int, bytes, bytes]:
+            assert command == "ss -Hltn"
+            return (
+                0,
+                (
+                    b"LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+                    b"LISTEN 0 128 127.0.0.1:5353 0.0.0.0:*\n"
+                ),
+                b"",
+            )
+
+    with pytest.raises(RuntimeError, match=r"127\.0\.0\.1:5353"):
+        await verify_no_remote_tcp_listener(Session(), 22)
 
 
 def _config(
@@ -69,6 +89,35 @@ def _native_video_profile() -> str:
     )
 
 
+@pytest.mark.parametrize("persistent", (False, True))
+def test_server_child_receives_configured_application_environment(
+    tmp_path: Path, persistent: bool
+) -> None:
+    values = (("APP_MODE", "literal $HOME; value=one"), ("EMPTY", ""))
+    application = (
+        sys.executable,
+        "-c",
+        "import json,os;print(json.dumps({k:os.environ[k] for k in ('APP_MODE','EMPTY')}))",
+    )
+    session = XpraSession(
+        replace(
+            _config(tmp_path),
+            application=application,
+            application_environment=values,
+            persistent=persistent,
+        )
+    )
+    option = "--start-child=" if persistent else "--start-child-after-connect="
+    child = next(
+        arg.partition("=")[2] for arg in session.server_argv() if arg.startswith(option)
+    )
+    completed = subprocess.run(
+        shlex.split(child), capture_output=True, timeout=10, check=False
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == dict(values)
+
+
 def test_exact_server_metadata_probe_and_mirrored_default_profiles(
     tmp_path: Path,
 ) -> None:
@@ -88,7 +137,7 @@ def test_exact_server_metadata_probe_and_mirrored_default_profiles(
         "seamless",
         *session_module._production_server_base_options(),
         f"--session-name={session.session_name}",
-        f"--start-child-after-connect={shlex.join(session.config.application)}",
+        f"--start-child-after-connect={shlex.join(application_argv(session.config.application))}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", config.encoding_profile),
         *session_module.clipboard_options(config.clipboard),
@@ -216,7 +265,7 @@ def test_h264_uses_the_mirrored_adaptive_alpha_and_selected_network_profile(
         "seamless",
         *session_module._production_server_base_options(),
         f"--session-name={session.session_name}",
-        f"--start-child-after-connect={shlex.join(session.config.application)}",
+        f"--start-child-after-connect={shlex.join(application_argv(session.config.application))}",
         *static_cli_options("server", "lifecycle"),
         *production_transport_options("server", encoding_profile),
         *session_module.clipboard_options(config.clipboard),
@@ -281,7 +330,6 @@ def test_gui_defaults_are_restored_for_every_profile_and_lifetime(
     assert {
         "--mousewheel=on",
         "--keyboard-sync=yes",
-        "--modal-windows=yes",
         "--desktop-scaling=on",
         "--system-tray=yes",
     }.issubset(session.attach_argv())
@@ -585,12 +633,14 @@ async def test_h264_capabilities_add_the_public_local_opengl_check(
         b"success=False\nsafe=True\n",
         b"success=True\nsafe=False\n",
         b"unrelated=value\n",
+        b"timeout",
     ),
 )
-async def test_native_video_local_opengl_probe_fails_closed(
+async def test_native_video_local_opengl_failure_falls_back_without_changing_server(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     probe_output: bytes,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     session = XpraSession(
         replace(_config(tmp_path), encoding_profile=_native_video_profile())
@@ -603,15 +653,77 @@ async def test_native_video_local_opengl_probe_fails_closed(
     )
 
     async def local(_argv: list[str], _timeout: float) -> tuple[int, bytes, bytes]:
-        return next(responses)
+        result = next(responses)
+        if result[1] == b"timeout":
+            raise SSHError("xpra_probe_timeout", "optional OpenGL timed out")
+        return result
 
     monkeypatch.setattr(session, "_run_local", local)
-    with pytest.raises(SSHError) as raised:
-        await session._check_local_capabilities()
+    server = session.server_argv()
+    await session._check_local_capabilities()
+    assert session.client_encoding_profile == DEFAULT_ENCODING_PROFILE
+    assert session.server_argv() == server
+    warning = capsys.readouterr().err
+    assert "H.264 acceleration disabled" in warning
+    assert "python3-opengl" in warning and "private diagnostic" not in warning
 
-    assert raised.value.code == "xpra_incompatible"
-    assert raised.value.message == "local Xpra OpenGL renderer is unavailable or unsafe"
-    assert "private" not in raised.value.message
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ("client", "server"))
+@pytest.mark.parametrize(
+    "response", (b'{"notifications": false, "render": false}', b"{}", b"not-json")
+)
+async def test_optional_prerequisites_disable_only_features_and_preserve_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    side: str,
+    response: bytes,
+) -> None:
+    config = replace(_config(tmp_path), encoding_profile=_native_video_profile())
+    session = XpraSession(config)
+
+    async def probe(*_args: Any) -> tuple[int, bytes, bytes]:
+        return 0, response, b"private diagnostic"
+
+    monkeypatch.setattr(session, "_run_local", probe)
+    monkeypatch.setattr(session, "_run_mux", probe)
+    try:
+        await session._check_desktop_prerequisites(side)
+        assert session.config == config
+        assert session.client_encoding_profile == DEFAULT_ENCODING_PROFILE
+        assert session.server_encoding_profile == (
+            DEFAULT_ENCODING_PROFILE if side == "server" else config.encoding_profile
+        )
+        assert session.local_notifications is (side != "client")
+        assert session.remote_notifications is (side != "server")
+        session._wrapper = tmp_path / "mux"
+        session._remote_display = "wayland-1"
+        client = session.attach_argv()
+        assert "--notifications=no" in client and "--system-tray=no" in client
+        assert set(load_live_cli()["server"]["clipboard"][config.clipboard]).issubset(
+            client
+        )
+        warnings = capsys.readouterr().err
+        assert "python3-dbus" in warnings and "libva-drm2" in warnings
+        assert "private diagnostic" not in warnings
+    finally:
+        session.journal.close()
+
+
+@pytest.mark.asyncio
+async def test_optional_probe_never_hides_lost_ssh_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = XpraSession(_config(tmp_path))
+
+    async def lost(*_args: Any) -> tuple[int, bytes, bytes]:
+        raise SSHError("connection_lost", "master ended")
+
+    monkeypatch.setattr(session, "_run_mux", lost)
+    with pytest.raises(SSHError, match="master ended"):
+        await session._check_desktop_prerequisites("server")
 
 
 class _WaitProcess:
@@ -713,17 +825,23 @@ async def test_early_remote_failure_reports_bounded_diagnostic(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("persistent", (False, True))
+@pytest.mark.parametrize(
+    "persistent,available", ((False, True), (True, True), (True, False))
+)
 async def test_run_cleans_remote_and_master_after_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistent: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, persistent: bool, available: bool
 ) -> None:
     session = XpraSession(replace(_config(tmp_path), persistent=persistent))
+    original_session_id = session.session_id
     events: list[str] = []
 
     async def record(name: str) -> None:
         events.append(name)
 
     monkeypatch.setattr(session, "_check_local_capabilities", lambda: record("local"))
+    monkeypatch.setattr(
+        session, "_check_desktop_prerequisites", lambda side: record(f"optional-{side}")
+    )
     monkeypatch.setattr(session.master, "start", lambda: record("master-start"))
 
     class FakeLogChannel:
@@ -757,12 +875,17 @@ async def test_run_cleans_remote_and_master_after_success(
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
             self.record = {"key": "a" * 64, "session_name": "persistent-fixture"}
 
+        async def prepare(self, _application: tuple[str, ...]) -> bool:
+            events.append("prepare")
+            return available
+
         async def identify(self, _application: tuple[str, ...]) -> str:
             events.append("identify")
             return "d" * 64
 
-        async def start(self, *_args: Any) -> None:
+        async def start(self, *_args: Any, **kwargs: Any) -> None:
             events.append("remote-start")
+            self.record["server_features"] = kwargs.get("server_features")
 
         async def close(self) -> None:
             events.append("remote-close")
@@ -771,17 +894,32 @@ async def test_run_cleans_remote_and_master_after_success(
     monkeypatch.setattr(session_module, "PersistentSession", FakeRemote)
 
     assert await session.run() == 0
+    assert session.persistent_enabled is (persistent and available)
+    if not available:
+        assert session.session_id == original_session_id
+        assert session.persistent is None
+        assert any(
+            arg.startswith("--start-child-after-connect=")
+            for arg in session.server_argv()
+        )
     assert events == [
         "local",
+        "optional-client",
         "master-start",
         "log-subscribe",
-        *(("identify", "log-close", "log-subscribe") if persistent else ()),
+        *(("prepare",) if persistent else ()),
+        *(
+            ("identify", "log-close", "log-subscribe")
+            if persistent and available
+            else ()
+        ),
         "remote-check",
+        "optional-server",
         "remote-start",
         "ready",
         "client",
         "lifecycle",
-        *(("remote-close",) if not persistent else ()),
+        *(("remote-close",) if not persistent or not available else ()),
         "log-close",
         "master-close",
     ]

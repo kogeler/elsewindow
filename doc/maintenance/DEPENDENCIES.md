@@ -25,8 +25,16 @@ standalone, or documentation extras. Its build-system setuptools range
 expresses a backend capability; the exact setuptools used by project commands
 is pinned in `requirements-package.in`.
 
-`ssh-wrapper==0.1.0` is the sole runtime dependency. Every audience that needs
-it resolves the reviewed PyPI wheel through generated hashes. This repository
+`ssh-wrapper` is the sole runtime dependency; its version is maintained only in
+[`requirements.in`](../../requirements.in). The standard-library helper
+[`tools/runtime_dependency.py`](../../tools/runtime_dependency.py) reads the
+current input for all six Make environments, clean-install and standalone smoke,
+and live dependency identity checks. Make verifies it both before reusing an
+environment and after installing one, so a stale lock cannot produce a successful
+preparation with a different runtime version. The lock validator compares the generated
+graphs against the same input. Tests change a fixture input to prove that a new
+pin needs no copied version constants or documentation edits.
+Every audience that needs it resolves the reviewed PyPI wheel through generated hashes. This repository
 does not vendor it, build it from another checkout, or add an import path to an
 uninstalled source tree.
 

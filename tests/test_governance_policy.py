@@ -9,6 +9,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from tools.runtime_dependency import runtime_version
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
 ACTION = re.compile(
@@ -204,10 +206,17 @@ def test_make_exposes_the_complete_governance_surface() -> None:
         "test-network-block",
         "confinement-test",
         "coverage-report",
+        "test-focused",
         "check",
         "ci",
     ):
         assert re.search(rf"^{re.escape(target)}:", makefile, re.MULTILINE), target
+    agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert (
+        "Run every build, image, container, and test action only through a Make target."
+        in agents
+    )
+    assert "make test-focused TESTS=" in agents
     assert makefile.count("--userns=auto:size=2048") == 3
     assert "tools/build_distributions.py" in makefile
     assert "tools/verify_distribution.py" in makefile
@@ -226,8 +235,13 @@ def test_make_exposes_the_complete_governance_surface() -> None:
     ):
         assert dependency_input in makefile
     assert "pip download --quiet --require-hashes" in makefile
-    assert "import importlib.metadata, ssh_wrapper" in makefile
-    assert "import importlib.metadata, pip, ssh_wrapper" in makefile
+    assert makefile.count("-I tools/runtime_dependency.py --check-installed") == 12
+    for audience in ("RUNTIME", "QUALITY", "TEST", "PACKAGE", "STANDALONE", "DOCS"):
+        install_check = (
+            f"\t\t$({audience}_PYTHON) -I tools/runtime_dependency.py --check-installed; \\\n"
+            f"\t\tcp -- '$({audience}_LOCK)' '$({audience}_STATE)';"
+        )
+        assert install_check in makefile
     assert "override NORMALIZATION_EPOCH := 315532800" in makefile
     assert "git log" not in makefile
     assert "git ls-files" not in (ROOT / "tools/create_live_payload.py").read_text(
@@ -358,7 +372,7 @@ def test_dependency_audiences_have_exact_direct_owners() -> None:
     assert {path.name for path in ROOT.glob("requirements*.in")} == expected_inputs
 
     runtime = _input_requirements(ROOT / "requirements.in", extends_runtime=False)
-    assert runtime == {"ssh-wrapper": "0.1.0"}
+    assert runtime == {"ssh-wrapper": runtime_version(ROOT)}
     expected = {
         "quality": {"bandit", "mypy", "pip-audit", "pip-licenses", "ruff"},
         "test": {"pytest", "pytest-asyncio", "pytest-cov", "pytest-xdist"},
