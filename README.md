@@ -80,7 +80,10 @@ standard-library installer for Debian 13 and Ubuntu 26.04. It resolves the
 newest canonical package release from `kogeler/xpra:develop`, verifies archive
 and DEB contents before mutation, prints the exact installed Xpra inventory,
 and requires interactive confirmation before purging that inventory. It uses
-APT for the validated local packages and dependencies.
+APT for the validated local packages and dependencies. Pass
+`--release NAME` (a release name or exact tag) to install a specific canonical
+release instead of the newest one; with a streamed script use
+`/usr/bin/python3 - --release NAME`.
 
 Elsewindow deliberately uses this maintained fork rather than treating a
 generic upstream Xpra build as interchangeable. Project development uncovered

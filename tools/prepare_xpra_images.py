@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from tools import container_payload
 from tools import install_xpra_release as installer
+from tools.xpra_test_release import pinned_release_name
 
 PODMAN: Final = os.environ.get("PODMAN", "podman")
 DESCRIPTOR: Final = ROOT / ".artifacts/xpra-images/current.json"
@@ -122,6 +123,9 @@ class StaticApi:
     def verify_develop_commit(self, commit: str) -> None:
         self.live.verify_develop_commit(commit)
 
+    def verify_tag_commit(self, tag: str, commit: str) -> None:
+        self.live.verify_tag_commit(tag, commit)
+
 
 def run(
     arguments: Sequence[str], *, timeout: int = COMMAND_TIMEOUT
@@ -173,12 +177,15 @@ def assert_no_runtime(label: str) -> None:
         raise ImageError(f"existing runtime objects use label {label}: {names}")
 
 
-def resolve_release() -> tuple[
-    installer.GitHubApi, installer.ForkRelease, Mapping[str, Any]
-]:
+def resolve_release(
+    release_name: str,
+) -> tuple[installer.GitHubApi, installer.ForkRelease, Mapping[str, Any]]:
     api = installer.GitHubApi(token=os.environ.get("GITHUB_TOKEN") or None)
     values = api.releases()
-    release = installer.resolve_latest_release(StaticApi(values, api))  # type: ignore[arg-type]
+    release = installer.resolve_latest_release(
+        StaticApi(values, api),  # type: ignore[arg-type]
+        release_name=release_name,
+    )
     raw = next(
         (
             value
@@ -519,7 +526,8 @@ def prepare() -> dict[str, Any]:
     if os.geteuid() == 0:
         raise ImageError("Xpra image preparation requires rootless Podman")
     assert_no_runtime(OWNER_LABEL)
-    api, release, raw = resolve_release()
+    release_name = pinned_release_name()
+    api, release, raw = resolve_release(release_name)
     with tempfile.TemporaryDirectory(prefix="elsewindow-images-") as temporary:
         stage = Path(temporary)
         stage.chmod(0o700)
@@ -527,7 +535,7 @@ def prepare() -> dict[str, Any]:
         release_path.write_text(installer.canonical_json(raw), encoding="utf-8")
         release_path.chmod(0o600)
         images = [prepare_one(spec, release, release_path, stage) for spec in SPECS]
-    installer.verify_release_is_current(release, api)
+    installer.verify_release_is_current(release, api, release_name=release_name)
     assert_no_runtime(OWNER_LABEL)
     result = {
         "images": {image["role"]: image for image in images},
