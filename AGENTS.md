@@ -201,6 +201,12 @@ matrix reaches its end. Then run one complete `make live-test` without
 the same resume procedure from the failed case and finish with another
 complete run.
 
+Every job reachable from a `pull_request` trigger may be a required status
+check, so never add `paths`, `paths-ignore`, `branches`, or `branches-ignore`
+filters to a `pull_request` trigger; a filtered required check never reports
+and blocks the pull request indefinitely. Keep required job names stable and
+update the `main` ruleset in the same change when renaming one.
+
 The privileged PR metadata workflow executes only trusted default-branch code.
 Treat the pull-request head `CHANGELOG.md` as bounded inert data and replace
 only the single marker-delimited body section. A populated `## Unreleased`
