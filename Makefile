@@ -501,7 +501,8 @@ image-load-governance:
 	@$(PODMAN) image exists '$(CONFINEMENT_TAG)'
 
 xpra-release-status:
-	@$(SYSTEM_PYTHON) tools/install_xpra_release.py resolve
+	@$(SYSTEM_PYTHON) tools/install_xpra_release.py resolve \
+		$(if $(XPRA_RELEASE),--release '$(XPRA_RELEASE)')
 
 xpra-images:
 	@PODMAN='$(PODMAN)' $(SYSTEM_PYTHON) tools/prepare_xpra_images.py prepare

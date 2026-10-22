@@ -17,6 +17,7 @@ from tools import install_xpra_release as releases
 COMMIT = "1" * 40
 VERSION = "7.0-r1-1"
 DIGEST = "2" * 64
+TAG = f"kogeler-deb-{VERSION}-run123-attempt1"
 
 
 def package_manifest(content: bytes = b"deb-package") -> dict[str, Any]:
@@ -151,12 +152,16 @@ class StubApi:
     def __init__(self, values: list[dict[str, Any]]) -> None:
         self.values = values
         self.verified: list[str] = []
+        self.tagged: list[tuple[str, str]] = []
 
     def releases(self) -> tuple[Any, ...]:
         return tuple(self.values)
 
     def verify_develop_commit(self, commit: str) -> None:
         self.verified.append(commit)
+
+    def verify_tag_commit(self, tag: str, commit: str) -> None:
+        self.tagged.append((tag, commit))
 
 
 def write_private(path: Path, content: bytes) -> None:
@@ -268,7 +273,8 @@ def test_resolve_selects_named_release(tmp_path: Path) -> None:
 
     assert (by_name.release_id, by_name.version) == (9, older_version)
     assert (by_tag.release_id, by_tag.tag) == (8, older["tag_name"])
-    assert api.verified == [COMMIT, COMMIT]
+    assert api.verified == []
+    assert api.tagged == [(rerun["tag_name"], COMMIT), (older["tag_name"], COMMIT)]
     releases.verify_release_is_current(  # type: ignore[arg-type]
         by_name, StubApi([older, rerun, newer]), release_name=older_version
     )
@@ -283,6 +289,7 @@ def test_unknown_or_invalid_release_name_is_rejected(tmp_path: Path) -> None:
         with pytest.raises(releases.ReleaseError, match="release selector"):
             releases.resolve_latest_release(api, release_name=invalid)  # type: ignore[arg-type]
     assert api.verified == []
+    assert api.tagged == []
 
 
 def test_fresh_resolution_detects_release_race(tmp_path: Path) -> None:
@@ -325,6 +332,47 @@ def test_verify_develop_commit_requires_selected_merge_base() -> None:
 
     with pytest.raises(releases.ReleaseError, match="not in current develop"):
         api.verify_develop_commit(COMMIT)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": COMMIT, "type": "commit"}},
+            None,
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": "f" * 40, "type": "commit"}},
+            "not point at its release commit",
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": COMMIT, "type": "tag"}},
+            "directly at a commit",
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}-x", "object": {"sha": COMMIT, "type": "commit"}},
+            "not exact",
+        ),
+    ],
+)
+def test_verify_tag_commit_requires_exact_lightweight_tag(
+    payload: dict[str, Any], message: str | None
+) -> None:
+    api = releases.GitHubApi()
+    urls: list[str] = []
+
+    def get_json(url: str) -> Any:
+        urls.append(url)
+        return payload
+
+    api.get_json = get_json  # type: ignore[method-assign]
+
+    if message is None:
+        api.verify_tag_commit(TAG, COMMIT)
+    else:
+        with pytest.raises(releases.ReleaseError, match=message):
+            api.verify_tag_commit(TAG, COMMIT)
+    assert urls == [f"{releases.TAG_REF_API}/{TAG}"]
 
 
 def test_validate_package_archive(tmp_path: Path) -> None:

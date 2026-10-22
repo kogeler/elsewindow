@@ -163,7 +163,10 @@ the stable `elsewindow: missing_dependency:` prefix.
 The standalone [package installer](../tools/install_xpra_release.py) is a
 separate privileged boundary. It refuses unsupported systems, verifies release
 ancestry, checksums, archive structure, DEB metadata, and required runtime
-files before mutation, and obtains confirmation from the controlling terminal
+files before mutation. The default newest release must be an ancestor of current
+`develop`; an operator-named `--release` instead requires its release tag to
+point directly at its transaction commit, since older releases leave the rebased
+`develop` history. It obtains confirmation from the controlling terminal
 when an Xpra inventory exists. It rechecks the inventory immediately before
 purge, stages immutable copies in a root-owned directory, and installs through
 APT. A failed transaction after purge can leave Xpra absent; review recovery

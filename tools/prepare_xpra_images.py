@@ -122,6 +122,9 @@ class StaticApi:
     def verify_develop_commit(self, commit: str) -> None:
         self.live.verify_develop_commit(commit)
 
+    def verify_tag_commit(self, tag: str, commit: str) -> None:
+        self.live.verify_tag_commit(tag, commit)
+
 
 def run(
     arguments: Sequence[str], *, timeout: int = COMMAND_TIMEOUT

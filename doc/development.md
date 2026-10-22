@@ -95,9 +95,11 @@ checked before network access. With no arguments it installs; `resolve` is the
 read-only release diagnostic. Both select the newest canonical release by
 default; `--release NAME` selects the canonical release whose name (its package
 version) or exact tag equals `NAME`, preferring the newest when a version was
-republished. A named release passes the same develop-ancestry, checksum, and
-payload validation, and the post-install freshness check re-resolves the same
-selector.
+republished. Because the fork rebases `develop`, a named release replaces the
+current develop-ancestry check with an exact lightweight release tag that must
+point at the commit recorded in its transaction marker. All checksum and payload
+validation is unchanged, and the post-install freshness check re-resolves the
+same selector.
 
 When an Xpra inventory exists, the helper prints every package, version, and
 dpkg status and accepts only interactive `y` or `yes` from `/dev/tty`. It then
@@ -123,6 +125,9 @@ Resolve and prepare the latest release-backed client and target images with:
 make xpra-release-status
 make xpra-images
 ```
+
+`make xpra-release-status XPRA_RELEASE=NAME` resolves the named release with
+the installer's `--release` validation, without preparing images.
 
 The project owns one automatic live topology. Preflight confirms that the two
 immutable images and rootless Podman are available; the full target streams

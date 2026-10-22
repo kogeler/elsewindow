@@ -33,6 +33,7 @@ REPOSITORY: Final = "kogeler/xpra"
 DEVELOP_BRANCH: Final = "develop"
 RELEASES_API: Final = f"https://api.github.com/repos/{REPOSITORY}/releases"
 COMPARE_API: Final = f"https://api.github.com/repos/{REPOSITORY}/compare"
+TAG_REF_API: Final = f"https://api.github.com/repos/{REPOSITORY}/git/ref/tags"
 WORKFLOW: Final = ".github/workflows/deb-packages.yml"
 TRANSACTION_OWNER: Final = "xpra-deb-packages"
 TRANSACTION_PREFIX: Final = "<!-- xpra-deb-transaction:"
@@ -629,6 +630,23 @@ class GitHubApi:
         if status_value not in {"ahead", "identical"}:
             raise ReleaseError("release commit is not an ancestor of current develop")
 
+    def verify_tag_commit(self, tag: str, commit: str) -> None:
+        selected = _commit(commit, "selected release commit")
+        payload = _mapping(
+            self.get_json(f"{TAG_REF_API}/{urllib.parse.quote(tag, safe='')}"),
+            "GitHub tag reference",
+        )
+        if (
+            _plain_string(payload.get("ref"), "tag reference name")
+            != f"refs/tags/{tag}"
+        ):
+            raise ReleaseError("release tag reference is not exact")
+        target = _mapping(payload.get("object"), "tag reference target")
+        if _plain_string(target.get("type"), "tag reference target type") != "commit":
+            raise ReleaseError("release tag does not point directly at a commit")
+        if _commit(target.get("sha"), "tag reference commit") != selected:
+            raise ReleaseError("release tag does not point at its release commit")
+
 
 def release_selector(value: str) -> str:
     """Validate a release name or exact tag supplied by the operator."""
@@ -646,7 +664,9 @@ def resolve_latest_release(
     """Resolve and verify the unique newest canonical fork package release.
 
     With ``release_name``, only canonical releases whose name (the package
-    version) or exact tag equals the selector are candidates.
+    version) or exact tag equals the selector are candidates. The fork rebases
+    ``develop``, so a deliberately named release is bound to its immutable tag
+    instead of current develop ancestry.
     """
     selector = None if release_name is None else release_selector(release_name)
     candidates: list[tuple[dt.datetime, ForkRelease]] = []
@@ -679,7 +699,10 @@ def resolve_latest_release(
         next_time, next_release = candidates[1]
         if newest_time == next_time and newest.release_id == next_release.release_id:
             raise ReleaseError("newest canonical release is ambiguous")
-    api.verify_develop_commit(newest.commit)
+    if selector is None:
+        api.verify_develop_commit(newest.commit)
+    else:
+        api.verify_tag_commit(newest.tag, newest.commit)
     return newest
 
 

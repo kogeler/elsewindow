@@ -11,6 +11,8 @@ All notable changes to Elsewindow are documented here.
 - Let the standalone Xpra installer select a specific canonical fork release
   with `--release NAME`, matching the release name or exact tag, for both
   `install` and `resolve`. Without it the newest release is still installed.
+  A named release is bound to its exact release tag commit instead of current
+  `develop` ancestry, which older releases lose when the fork is rebased.
 
 ### Fixed
 
