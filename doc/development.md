@@ -92,7 +92,12 @@ retained predecessor and never installs host packages.
 `tools/install_xpra_release.py` uses only the Python standard library and
 system APT/dpkg commands. It supports only amd64 Debian 13 and Ubuntu 26.04,
 checked before network access. With no arguments it installs; `resolve` is the
-read-only release diagnostic.
+read-only release diagnostic. Both select the newest canonical release by
+default; `--release NAME` selects the canonical release whose name (its package
+version) or exact tag equals `NAME`, preferring the newest when a version was
+republished. A named release passes the same develop-ancestry, checksum, and
+payload validation, and the post-install freshness check re-resolves the same
+selector.
 
 When an Xpra inventory exists, the helper prints every package, version, and
 dpkg status and accepts only interactive `y` or `yes` from `/dev/tty`. It then

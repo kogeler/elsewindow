@@ -42,7 +42,7 @@ driver on both systems.
 
 This repository consumes checksum-bound DEB archives published by
 `kogeler/xpra`. `tools/install_xpra_release.py` can install the newest owned
-release on Debian 13 or Ubuntu 26.04; see
+release, or a named one with `--release NAME`, on Debian 13 or Ubuntu 26.04; see
 [Development](development.md#standalone-system-installer). The launcher
 itself never installs or changes packages. The installer validates the actual
 DEB payload for the native libva encoder and decoder, libyuv, GTK OpenGL,

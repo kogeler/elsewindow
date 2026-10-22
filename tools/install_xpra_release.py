@@ -3,7 +3,7 @@
 # Copyright (c) 2026 kogeler
 # SPDX-License-Identifier: MIT
 
-"""Resolve and install the newest canonical Xpra fork package release."""
+"""Resolve and install the newest or a named canonical Xpra fork package release."""
 
 from __future__ import annotations
 
@@ -58,6 +58,8 @@ MAX_RELEASE_PAGES: Final = 100
 RELEASES_PER_PAGE: Final = 100
 MAX_JSON_BYTES: Final = 8 * 1024 * 1024
 MAX_ASSET_BYTES: Final = 2 * 1024 * 1024 * 1024
+MAX_RELEASE_SELECTOR_BYTES: Final = 256
+RELEASE_SELECTOR_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+~:_-]*$")
 MAX_ARCHIVE_MEMBERS: Final = 256
 MAX_MANIFEST_BYTES: Final = 2 * 1024 * 1024
 MAX_PACKAGE_BYTES: Final = 512 * 1024 * 1024
@@ -628,8 +630,25 @@ class GitHubApi:
             raise ReleaseError("release commit is not an ancestor of current develop")
 
 
-def resolve_latest_release(api: GitHubApi) -> ForkRelease:
-    """Resolve and verify the unique newest canonical fork package release."""
+def release_selector(value: str) -> str:
+    """Validate a release name or exact tag supplied by the operator."""
+    if (
+        len(value.encode("utf-8")) > MAX_RELEASE_SELECTOR_BYTES
+        or RELEASE_SELECTOR_PATTERN.fullmatch(value) is None
+    ):
+        raise ReleaseError("release selector is not a valid release name or tag")
+    return value
+
+
+def resolve_latest_release(
+    api: GitHubApi, *, release_name: str | None = None
+) -> ForkRelease:
+    """Resolve and verify the unique newest canonical fork package release.
+
+    With ``release_name``, only canonical releases whose name (the package
+    version) or exact tag equals the selector are candidates.
+    """
+    selector = None if release_name is None else release_selector(release_name)
     candidates: list[tuple[dt.datetime, ForkRelease]] = []
     seen_ids: set[int] = set()
     seen_tags: set[str] = set()
@@ -646,8 +665,13 @@ def resolve_latest_release(api: GitHubApi) -> ForkRelease:
         parsed = parse_release(release)
         if parsed is not None:
             candidate, published = parsed
-            candidates.append((published, candidate))
+            if selector is None or selector in {candidate.version, candidate.tag}:
+                candidates.append((published, candidate))
     if not candidates:
+        if selector is not None:
+            raise ReleaseError(
+                f"no canonical Xpra fork package release is named {selector}"
+            )
         raise ReleaseError("no canonical Xpra fork package release exists")
     candidates.sort(key=lambda item: (item[0], item[1].release_id), reverse=True)
     newest_time, newest = candidates[0]
@@ -659,9 +683,11 @@ def resolve_latest_release(api: GitHubApi) -> ForkRelease:
     return newest
 
 
-def verify_release_is_current(selected: ForkRelease, api: GitHubApi) -> None:
+def verify_release_is_current(
+    selected: ForkRelease, api: GitHubApi, *, release_name: str | None = None
+) -> None:
     """Fail if fresh discovery no longer resolves to the selected release."""
-    current = resolve_latest_release(api)
+    current = resolve_latest_release(api, release_name=release_name)
     if current != selected:
         raise ReleaseError("a newer or changed canonical package release is available")
 
@@ -1729,6 +1755,7 @@ def verify_installed_system(
 
 def install_latest_release(
     *,
+    release_name: str | None = None,
     confirmation: PurgeConfirmation | None = None,
     runner: CommandRunner = run_command,
     privileged_runner: CommandRunner | None = None,
@@ -1737,7 +1764,9 @@ def install_latest_release(
     euid: int | None = None,
     staging_parent: Path = Path("/var/tmp"),
 ) -> dict[str, Any]:
-    """Perform the destructive, validated newest-release package transaction."""
+    """Perform the destructive, validated newest or named release transaction."""
+    if release_name is not None:
+        release_selector(release_name)
     effective_uid = os.geteuid() if euid is None else euid
     if (
         not isinstance(effective_uid, int)
@@ -1758,7 +1787,7 @@ def install_latest_release(
         require_sudo()
         transaction_runner = run_sudo_command
     selected_api = api or GitHubApi(token=os.environ.get("GITHUB_TOKEN") or None)
-    release = resolve_latest_release(selected_api)
+    release = resolve_latest_release(selected_api, release_name=release_name)
     asset = release.asset(ASSET_FOR_DISTRO[target.distro])
     try:
         stage = Path(
@@ -1808,7 +1837,7 @@ def install_latest_release(
             target.distro,
             runner=transaction_runner,
         )
-        verify_release_is_current(release, selected_api)
+        verify_release_is_current(release, selected_api, release_name=release_name)
         result = {
             "architecture": target.architecture,
             "asset_id": asset.asset_id,
@@ -1883,21 +1912,50 @@ def install_latest_release(
     return result
 
 
-def release_from_environment() -> ForkRelease:
+def release_from_environment(release_name: str | None = None) -> ForkRelease:
     """Resolve the public release using an optional non-logged API token."""
     token = os.environ.get("GITHUB_TOKEN") or None
-    return resolve_latest_release(GitHubApi(token=token))
+    return resolve_latest_release(GitHubApi(token=token), release_name=release_name)
+
+
+def _release_argument(value: str) -> str:
+    try:
+        return release_selector(value)
+    except ReleaseError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _add_release_option(
+    value: argparse.ArgumentParser, *, default: object = None
+) -> None:
+    value.add_argument(
+        "--release",
+        dest="release_name",
+        metavar="NAME",
+        type=_release_argument,
+        default=default,
+        help=(
+            "select the canonical release with this name (package version) or "
+            "exact tag instead of the newest release"
+        ),
+    )
 
 
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
+    _add_release_option(value)
     commands = value.add_subparsers(dest="command")
     value.set_defaults(command="install")
-    resolve = commands.add_parser("resolve", help="print the newest release descriptor")
-    resolve.add_argument("--asset-for", choices=tuple(sorted(ASSET_FOR_DISTRO)))
-    commands.add_parser(
-        "install", help="purge existing Xpra packages and install the newest release"
+    resolve = commands.add_parser(
+        "resolve", help="print the newest or selected release descriptor"
     )
+    resolve.add_argument("--asset-for", choices=tuple(sorted(ASSET_FOR_DISTRO)))
+    _add_release_option(resolve, default=argparse.SUPPRESS)
+    install = commands.add_parser(
+        "install",
+        help="purge existing Xpra packages and install the newest or selected release",
+    )
+    _add_release_option(install, default=argparse.SUPPRESS)
     return value
 
 
@@ -1905,14 +1963,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
         if arguments.command == "resolve":
-            release = release_from_environment()
+            release = release_from_environment(arguments.release_name)
             descriptor = release.descriptor()
             if arguments.asset_for is not None:
                 asset_name = ASSET_FOR_DISTRO[arguments.asset_for]
                 descriptor["selected_asset"] = asset_name
             result = descriptor
         else:
-            result = install_latest_release()
+            result = install_latest_release(release_name=arguments.release_name)
         sys.stdout.write(canonical_json(result))
     except InstallationCancelled as error:
         print(f"xpra release: {error}", file=sys.stderr)

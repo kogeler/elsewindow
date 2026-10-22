@@ -6,6 +6,12 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+### Added
+
+- Let the standalone Xpra installer select a specific canonical fork release
+  with `--release NAME`, matching the release name or exact tag, for both
+  `install` and `resolve`. Without it the newest release is still installed.
+
 ### Fixed
 
 - Submit the two Xpra environment locks together with the other six to the
