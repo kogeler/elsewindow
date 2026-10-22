@@ -15,6 +15,7 @@ import pty
 import re
 import secrets
 import selectors
+import shlex
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 from tools import container_payload
 from tools import install_xpra_release as installer
+from tools.xpra_test_release import pinned_release_name
 
 PODMAN: Final = os.environ.get("PODMAN", "podman")
 OWNER_LABEL: Final = "io.elsewindow.owner"
@@ -89,10 +91,11 @@ def text(
         raise AcceptanceError("command returned non-UTF-8 output") from error
 
 
-def interactive_installer_command(container: str) -> tuple[str, ...]:
+def interactive_installer_command(container: str, release_name: str) -> tuple[str, ...]:
     """Run the exact local installer source through a human-style terminal."""
     pipeline = (
-        "/usr/bin/cat /usr/local/libexec/install_xpra_release.py | /usr/bin/python3 -"
+        "/usr/bin/cat /usr/local/libexec/install_xpra_release.py | /usr/bin/python3 - "
+        f"--release {shlex.quote(installer.release_selector(release_name))}"
     )
     return (
         PODMAN,
@@ -408,7 +411,7 @@ def run_system(
     *,
     distro: str,
     base: str,
-    latest: installer.ForkRelease,
+    pinned: installer.ForkRelease,
     run_id: str,
 ) -> dict[str, Any]:
     base_id, image_id, image_input = prepare_image(distro, base)
@@ -448,9 +451,9 @@ def run_system(
     print(f"xpra installer: starting fresh {distro} container", file=sys.stderr)
     run(arguments)
     try:
-        install_command = interactive_installer_command(name)
+        install_command = interactive_installer_command(name, pinned.tag)
         initial = terminal_json_output(install_command, answer=None)
-        expected_result(initial, latest, distro)
+        expected_result(initial, pinned, distro)
         if initial.get("pre_purge_packages") != []:
             raise AcceptanceError(
                 "fresh container unexpectedly contained Xpra packages"
@@ -479,8 +482,8 @@ def run_system(
             raise AcceptanceError("declined installer confirmation changed packages")
 
         replacement = terminal_json_output(install_command, answer=b"yes\n")
-        expected_result(replacement, latest, distro)
-        require_pre_purge(replacement.get("pre_purge_packages"), "latest replacement")
+        expected_result(replacement, pinned, distro)
+        require_pre_purge(replacement.get("pre_purge_packages"), "pinned replacement")
         return {
             "base_image_id": base_id,
             "distro": distro,
@@ -504,21 +507,23 @@ def main() -> int:
     try:
         assert_no_owned_containers(OWNER_LABEL)
         api = installer.GitHubApi(token=os.environ.get("GITHUB_TOKEN") or None)
-        latest = installer.resolve_latest_release(api)
+        pinned = installer.resolve_latest_release(
+            api, release_name=pinned_release_name()
+        )
         run_id = secrets.token_hex(6)
         systems = [
             run_system(
                 distro=distro,
                 base=base,
-                latest=latest,
+                pinned=pinned,
                 run_id=run_id,
             )
             for distro, base in SYSTEMS
         ]
         assert_no_owned_containers(OWNER_LABEL)
         result = {
-            "latest_release": latest.descriptor(),
-            "schema": 2,
+            "pinned_release": pinned.descriptor(),
+            "schema": 3,
             "systems": systems,
         }
         sys.stdout.write(installer.canonical_json(result))
