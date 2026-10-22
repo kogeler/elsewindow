@@ -23,6 +23,10 @@ All notable changes to Elsewindow are documented here.
 
 ### Fixed
 
+- Run the documentation build on every pull request. It is a required check,
+  and its path filter left pull requests that did not touch documentation
+  inputs, including Dependabot updates, waiting forever for it. A unit test now
+  rejects path or branch filters on any `pull_request` trigger.
 - Submit the two Xpra environment locks together with the other six to the
   GitHub dependency graph. Since 0.2.0 the push-only submission job rejected the
   generated snapshot; a unit test now keeps its accepted manifest list equal to

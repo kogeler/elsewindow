@@ -181,6 +181,42 @@ def test_pr_body_metadata_uses_trusted_code_and_bounded_head_data() -> None:
     assert "ref:" not in checkout
 
 
+def _trigger_block(workflow: str, event: str) -> str | None:
+    """Return the indented body of one top-level ``on:`` event, if present."""
+    lines = workflow.split("\n")
+    for index, line in enumerate(lines):
+        if line.rstrip() == f"  {event}:":
+            body = []
+            for following in lines[index + 1 :]:
+                if following.strip() and not following.startswith("    "):
+                    break
+                body.append(following)
+            return "\n".join(body)
+    return None
+
+
+def test_pull_request_checks_always_report() -> None:
+    # Every job reached by `pull_request` may be a required status check. A
+    # filtered trigger never reports, so the ruleset waits forever for it.
+    filtered = {}
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        body = _trigger_block(path.read_text(encoding="utf-8"), "pull_request")
+        if body is None:
+            continue
+        keys = re.findall(
+            r"^ {4}(paths|paths-ignore|branches|branches-ignore):",
+            body,
+            re.MULTILINE,
+        )
+        if keys:
+            filtered[path.name] = keys
+
+    assert filtered == {}
+    pages = (WORKFLOWS / "pages.yml").read_text(encoding="utf-8")
+    assert _trigger_block(pages, "pull_request") is not None
+    assert "name: Render and audit site" in pages
+
+
 def test_make_exposes_the_complete_governance_surface() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     for target in (
