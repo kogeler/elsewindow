@@ -6,7 +6,7 @@ from tests import xpra_installer_acceptance as acceptance
 from tools import install_xpra_release as installer
 
 
-def test_acceptance_uses_only_the_latest_release_without_history_input() -> None:
+def test_acceptance_uses_only_the_pinned_release_without_history_input() -> None:
     source = (acceptance.ROOT / "tests/xpra_installer_acceptance.py").read_text(
         encoding="utf-8"
     )
@@ -15,7 +15,10 @@ def test_acceptance_uses_only_the_latest_release_without_history_input() -> None
         acceptance.CONTAINERFILE,
         acceptance.INSTALLER,
     )
-    assert source.count("resolve_latest_release(api)") == 1
+    assert source.count("installer.resolve_latest_release(") == 1
+    assert source.count("release_name=pinned_release_name()") == 1
+    command = acceptance.interactive_installer_command("guest", "7.0-r1-1")
+    assert command[-1].endswith("/usr/bin/python3 - --release 7.0-r1-1")
     for forbidden in ("older", "predecessor", "verify_release_is_current"):
         assert forbidden not in source.casefold()
 

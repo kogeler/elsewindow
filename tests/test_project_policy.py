@@ -86,6 +86,7 @@ def test_top_level_inventory_is_exact_and_contains_no_generated_state() -> None:
         "MANIFEST.in",
         "Makefile",
         "README.md",
+        "XPRA_TEST_RELEASE",
         "bin",
         "containers",
         "doc",

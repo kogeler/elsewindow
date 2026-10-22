@@ -28,6 +28,11 @@ application's source tree.
   installer for Debian 13 and Ubuntu 26.04.
 - `tools/prepare_xpra_images.py` prepares release-backed client and target
   images by immutable ID.
+- `XPRA_TEST_RELEASE` is the single pin of the `kogeler/xpra` package release
+  used by `make xpra-images`, the live tests, and `make xpra-installer-test`;
+  `tools/xpra_test_release.py` reads it. It never changes the installer's
+  newest-release default for users. Move it only by the procedure in
+  `doc/development.md#pinned-xpra-test-release`.
 - `tools/container_payload.py` owns every project container file transfer.
 - `tools/project_tree.py` enumerates maintained current-tree files without Git
   metadata and is the sole container-context inventory authority.
@@ -159,9 +164,11 @@ application's source tree.
   as a lightweight probe derived from the pinned upstream source, and name
   that version and those code paths in the probe, instead of shipping the
   application into an image.
-- Installer acceptance and image preparation resolve the newest valid fork
-  package release during each run. Never require a predecessor or retained
-  release history as a gate input.
+- Installer acceptance and image preparation resolve exactly the release
+  pinned in `XPRA_TEST_RELEASE` during each run. Never hard-code a release
+  elsewhere, and never require any other release as a gate input. Advance the
+  pin only after the candidate passes the complete live matrix and installer
+  acceptance.
 
 ## Change and validation workflow
 

@@ -267,8 +267,9 @@ private runtime paths.
 
 ## Release-backed Image Verification
 
-`make xpra-images` freshly resolves the newest canonical `kogeler/xpra`
-package release, validates both distribution archives, and prepares matching
+`make xpra-images` freshly resolves the canonical `kogeler/xpra` package
+release pinned in
+[`XPRA_TEST_RELEASE`](development.md#pinned-xpra-test-release), validates both distribution archives, and prepares matching
 Ubuntu 26.04 target and Debian 13 client images. Build inputs and connection
 material are streamed through validated archives; no host path is bind-mounted
 and `podman cp` is not used. Consumers execute the images by immutable image ID

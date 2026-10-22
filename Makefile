@@ -500,6 +500,10 @@ image-load-governance:
 	@$(PODMAN) load --quiet < '$(ARTIFACTS)/images/governance.tar' >/dev/null
 	@$(PODMAN) image exists '$(CONFINEMENT_TAG)'
 
+# Defaults to the XPRA_TEST_RELEASE pin used by xpra-images and
+# xpra-installer-test; XPRA_RELEASE=NAME selects another, XPRA_RELEASE= the newest.
+XPRA_RELEASE = $(shell $(SYSTEM_PYTHON) tools/xpra_test_release.py)
+
 xpra-release-status:
 	@$(SYSTEM_PYTHON) tools/install_xpra_release.py resolve \
 		$(if $(XPRA_RELEASE),--release '$(XPRA_RELEASE)')

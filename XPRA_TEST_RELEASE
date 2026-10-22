@@ -1,0 +1,11 @@
+# Xpra fork package release used by every Elsewindow test gate.
+#
+# `make xpra-images` (live tests) and `make xpra-installer-test` resolve exactly
+# this canonical kogeler/xpra release instead of the newest one. Write one
+# release name (the package version) or exact release tag on the only
+# non-comment line. The standalone installer's default for users is unchanged:
+# it still installs the newest release.
+#
+# Move the pin only after the new release passes the complete live matrix; see
+# doc/development.md#pinned-xpra-test-release.
+7.0-r42751-1
