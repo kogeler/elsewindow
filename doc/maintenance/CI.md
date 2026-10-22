@@ -52,10 +52,24 @@ never overwritten. This is the only workflow granted `pull-requests: write`;
 it never checks out or executes pull-request head code.
 
 [`pages.yml`](../../.github/workflows/pages.yml) renders the current
-repository documentation on pull requests and direct `main` pushes. Its build
+repository documentation on every pull request and on direct `main` pushes
+that change documentation inputs. Its build
 job has read-only permissions and runs the same strict offline audit as
 `make check`. Only the direct-main deploy job receives `pages: write` and
 `id-token: write`; pull requests never upload or deploy a Pages artifact.
+
+### Required status checks
+
+The `main` ruleset requires the stable job names of `ci.yml` and `pages.yml`
+(including `Render and audit site`) plus code scanning. GitHub waits
+indefinitely for a required check that a pull request never starts, so every
+`pull_request` trigger runs unconditionally: no `paths`, `paths-ignore`,
+`branches`, or `branches-ignore` filters. A unit test enforces this for every
+workflow. When a job must stay cheap for unrelated changes, let it start and
+decide inside its steps instead of filtering the trigger. Renaming a required
+job also requires updating the ruleset in the same change. A pull request opened
+before such a fix gets the check after its head is updated, for example with
+`@dependabot rebase`.
 
 Run `make validate-actions` after workflow changes. This locally checks syntax
 and pinned actions in a checksum-bound actionlint container. Structural policy

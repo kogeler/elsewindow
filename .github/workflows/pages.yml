@@ -3,19 +3,9 @@
 name: Documentation
 
 on:
+  # "Render and audit site" is a required status check, so every pull request
+  # must report it: never add paths/branches filters to this trigger.
   pull_request:
-    paths:
-      - "doc/**"
-      - "mkdocs.yml"
-      - "pyproject.toml"
-      - "requirements.in"
-      - "requirements-docs.in"
-      - "requirements-docs.txt"
-      - "tools/audit_docs_site.py"
-      - "tests/test_docs_site_audit.py"
-      - "tests/test_project_policy.py"
-      - "Makefile"
-      - ".github/workflows/pages.yml"
   push:
     branches:
       - main
