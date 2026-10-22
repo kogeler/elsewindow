@@ -17,6 +17,7 @@ from tools import install_xpra_release as releases
 COMMIT = "1" * 40
 VERSION = "7.0-r1-1"
 DIGEST = "2" * 64
+TAG = f"kogeler-deb-{VERSION}-run123-attempt1"
 
 
 def package_manifest(content: bytes = b"deb-package") -> dict[str, Any]:
@@ -92,6 +93,7 @@ def release_value(
     release_id: int = 10,
     published_at: str = "2026-08-29T12:00:00Z",
     run_id: int = 123,
+    version: str = VERSION,
 ) -> dict[str, Any]:
     other = b"ubuntu"
     payloads = {
@@ -113,10 +115,10 @@ def release_value(
         "repository": releases.REPOSITORY,
         "run_id": run_id,
         "schema": 1,
-        "version": VERSION,
+        "version": version,
         "workflow": releases.WORKFLOW,
     }
-    tag = f"kogeler-deb-{VERSION}-run{run_id}-attempt{attempt}"
+    tag = f"kogeler-deb-{version}-run{run_id}-attempt{attempt}"
     return {
         "assets": [
             {
@@ -138,7 +140,7 @@ def release_value(
         ),
         "draft": False,
         "id": release_id,
-        "name": VERSION,
+        "name": version,
         "prerelease": False,
         "published_at": published_at,
         "tag_name": tag,
@@ -150,12 +152,16 @@ class StubApi:
     def __init__(self, values: list[dict[str, Any]]) -> None:
         self.values = values
         self.verified: list[str] = []
+        self.tagged: list[tuple[str, str]] = []
 
     def releases(self) -> tuple[Any, ...]:
         return tuple(self.values)
 
     def verify_develop_commit(self, commit: str) -> None:
         self.verified.append(commit)
+
+    def verify_tag_commit(self, tag: str, commit: str) -> None:
+        self.tagged.append((tag, commit))
 
 
 def write_private(path: Path, content: bytes) -> None:
@@ -238,6 +244,54 @@ def test_missing_release_asset_is_rejected(tmp_path: Path) -> None:
         releases.parse_release(value)
 
 
+def test_resolve_selects_named_release(tmp_path: Path) -> None:
+    archive = package_tar(tmp_path)
+    older_version = "6.4.4-r1+kogeler.1"
+    older = release_value(
+        archive=archive,
+        release_id=8,
+        published_at="2026-08-27T12:00:00Z",
+        run_id=121,
+        version=older_version,
+    )
+    rerun = release_value(
+        archive=archive,
+        release_id=9,
+        published_at="2026-08-28T12:00:00Z",
+        run_id=122,
+        version=older_version,
+    )
+    newer = release_value(archive=archive)
+    api = StubApi([older, rerun, newer])
+
+    by_name = releases.resolve_latest_release(  # type: ignore[arg-type]
+        api, release_name=older_version
+    )
+    by_tag = releases.resolve_latest_release(  # type: ignore[arg-type]
+        api, release_name=older["tag_name"]
+    )
+
+    assert (by_name.release_id, by_name.version) == (9, older_version)
+    assert (by_tag.release_id, by_tag.tag) == (8, older["tag_name"])
+    assert api.verified == []
+    assert api.tagged == [(rerun["tag_name"], COMMIT), (older["tag_name"], COMMIT)]
+    releases.verify_release_is_current(  # type: ignore[arg-type]
+        by_name, StubApi([older, rerun, newer]), release_name=older_version
+    )
+
+
+def test_unknown_or_invalid_release_name_is_rejected(tmp_path: Path) -> None:
+    api = StubApi([release_value(archive=package_tar(tmp_path))])
+
+    with pytest.raises(releases.ReleaseError, match="is named 9.9.9"):
+        releases.resolve_latest_release(api, release_name="9.9.9")  # type: ignore[arg-type]
+    for invalid in ("", "../x", "a b", "x" * 300):
+        with pytest.raises(releases.ReleaseError, match="release selector"):
+            releases.resolve_latest_release(api, release_name=invalid)  # type: ignore[arg-type]
+    assert api.verified == []
+    assert api.tagged == []
+
+
 def test_fresh_resolution_detects_release_race(tmp_path: Path) -> None:
     content = package_tar(tmp_path)
     old_value = release_value(
@@ -278,6 +332,47 @@ def test_verify_develop_commit_requires_selected_merge_base() -> None:
 
     with pytest.raises(releases.ReleaseError, match="not in current develop"):
         api.verify_develop_commit(COMMIT)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": COMMIT, "type": "commit"}},
+            None,
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": "f" * 40, "type": "commit"}},
+            "not point at its release commit",
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}", "object": {"sha": COMMIT, "type": "tag"}},
+            "directly at a commit",
+        ),
+        (
+            {"ref": f"refs/tags/{TAG}-x", "object": {"sha": COMMIT, "type": "commit"}},
+            "not exact",
+        ),
+    ],
+)
+def test_verify_tag_commit_requires_exact_lightweight_tag(
+    payload: dict[str, Any], message: str | None
+) -> None:
+    api = releases.GitHubApi()
+    urls: list[str] = []
+
+    def get_json(url: str) -> Any:
+        urls.append(url)
+        return payload
+
+    api.get_json = get_json  # type: ignore[method-assign]
+
+    if message is None:
+        api.verify_tag_commit(TAG, COMMIT)
+    else:
+        with pytest.raises(releases.ReleaseError, match=message):
+            api.verify_tag_commit(TAG, COMMIT)
+    assert urls == [f"{releases.TAG_REF_API}/{TAG}"]
 
 
 def test_validate_package_archive(tmp_path: Path) -> None:
@@ -1209,17 +1304,16 @@ def test_verify_installed_system_checks_exact_inventory_and_runtime(
 def test_cli_defaults_to_install_and_has_no_confirmation_bypass(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    calls = 0
+    calls: list[str | None] = []
 
-    def install() -> dict[str, Any]:
-        nonlocal calls
-        calls += 1
+    def install(*, release_name: str | None) -> dict[str, Any]:
+        calls.append(release_name)
         return {"schema": 1, "status": "installed"}
 
     monkeypatch.setattr(releases, "install_latest_release", install)
 
     assert releases.main([]) == 0
-    assert calls == 1
+    assert calls == [None]
     assert json.loads(capsys.readouterr().out) == {
         "schema": 1,
         "status": "installed",
@@ -1228,10 +1322,54 @@ def test_cli_defaults_to_install_and_has_no_confirmation_bypass(
         releases.parser().parse_args(("install", "--yes-purge-existing-xpra"))
 
 
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ("--release", VERSION),
+        ("install", "--release", VERSION),
+        ("--release", VERSION, "install"),
+    ),
+)
+def test_cli_installs_named_release(
+    monkeypatch: pytest.MonkeyPatch, argv: tuple[str, ...]
+) -> None:
+    calls: list[str | None] = []
+
+    def install(*, release_name: str | None) -> dict[str, Any]:
+        calls.append(release_name)
+        return {"schema": 1}
+
+    monkeypatch.setattr(releases, "install_latest_release", install)
+
+    assert releases.main(argv) == 0
+    assert calls == [VERSION]
+
+
+def test_cli_resolves_named_release_and_rejects_invalid_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    value = release_value(archive=package_tar(tmp_path))
+    parsed = releases.parse_release(value)
+    assert parsed is not None
+    calls: list[str | None] = []
+
+    def resolve(release_name: str | None = None) -> releases.ForkRelease:
+        calls.append(release_name)
+        return parsed[0]
+
+    monkeypatch.setattr(releases, "release_from_environment", resolve)
+
+    assert releases.main(["resolve", "--release", VERSION]) == 0
+    assert releases.main(["resolve"]) == 0
+    assert calls == [VERSION, None]
+    with pytest.raises(SystemExit):
+        releases.parser().parse_args(("--release", "../x"))
+
+
 def test_cli_declined_confirmation_exits_without_success(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def cancelled() -> dict[str, Any]:
+    def cancelled(*, release_name: str | None) -> dict[str, Any]:
         raise releases.InstallationCancelled(
             "installation cancelled; no changes were made"
         )

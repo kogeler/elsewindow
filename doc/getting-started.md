@@ -36,7 +36,9 @@ route is pending until the first reviewed `main` push:
 Do not run the pipeline under `sudo`. The helper confirms the exact installed
 Xpra inventory through `/dev/tty`, validates the complete release and DEB
 capability payload, then invokes `/usr/bin/sudo` itself. It installs the local
-DEBs and their dependencies with APT rather than `dpkg -i`.
+DEBs and their dependencies with APT rather than `dpkg -i`. To install a
+specific canonical release instead of the newest, append `--release NAME` (the
+release name or its exact tag) after `/usr/bin/python3 -`.
 
 ## Install The Python Command
 

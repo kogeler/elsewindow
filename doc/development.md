@@ -81,18 +81,26 @@ Run the destructive package acceptance only on a host with rootless Podman:
 make xpra-installer-test
 ```
 
-It builds fresh Debian 13 and Ubuntu 26.04 containers and selects the newest
-valid package release currently published by the maintained fork. Each guest
-validates a clean installation, a declined replacement, and a confirmed
-purge/reinstallation of that same current release. The gate never requires a
-retained predecessor and never installs host packages.
+It builds fresh Debian 13 and Ubuntu 26.04 containers and installs the
+[pinned Xpra test release](#pinned-xpra-test-release) by running the installer
+with `--release` and that release's exact tag. Each guest validates a clean
+installation, a declined replacement, and a confirmed purge/reinstallation of
+that same release. The gate never requires any other release and never installs
+host packages.
 
 ### Standalone system installer
 
 `tools/install_xpra_release.py` uses only the Python standard library and
 system APT/dpkg commands. It supports only amd64 Debian 13 and Ubuntu 26.04,
 checked before network access. With no arguments it installs; `resolve` is the
-read-only release diagnostic.
+read-only release diagnostic. Both select the newest canonical release by
+default; `--release NAME` selects the canonical release whose name (its package
+version) or exact tag equals `NAME`, preferring the newest when a version was
+republished. Because the fork rebases `develop`, a named release replaces the
+current develop-ancestry check with an exact lightweight release tag that must
+point at the commit recorded in its transaction marker. All checksum and payload
+validation is unchanged, and the post-install freshness check re-resolves the
+same selector.
 
 When an Xpra inventory exists, the helper prints every package, version, and
 dpkg status and accepts only interactive `y` or `yes` from `/dev/tty`. It then
@@ -112,12 +120,42 @@ post-install verification imports every
 required module. Any
 missing, duplicate, symlinked, or unsafe payload fails before mutation.
 
-Resolve and prepare the latest release-backed client and target images with:
+Resolve and prepare the pinned release-backed client and target images with:
 
 ```bash
 make xpra-release-status
 make xpra-images
 ```
+
+`make xpra-release-status` resolves the pinned release without preparing
+images. `XPRA_RELEASE=NAME` resolves another named release, and an empty
+`XPRA_RELEASE=` resolves the newest one.
+
+### Pinned Xpra test release
+
+The root file [`XPRA_TEST_RELEASE`](../XPRA_TEST_RELEASE) is the only place
+that selects which `kogeler/xpra` package release the test gates use. It holds
+one release name (package version) or exact release tag; comment lines start
+with `#`. `tools/xpra_test_release.py` reads and validates it for
+`make xpra-images`, every `make live-test` that consumes those images, and
+`make xpra-installer-test`. Named-release rules are those of the installer's
+`--release` option: the release tag must point at its transaction commit
+instead of current `develop` ancestry.
+
+The pin only stabilizes the gates. The standalone installer and the documented
+user installation still install the newest release by default, so a newer fork
+release can work for users while the gates still test the pinned one.
+
+To move the pin:
+
+1. Run `make xpra-release-status XPRA_RELEASE=` to see the newest release.
+2. Write its name to `XPRA_TEST_RELEASE`.
+3. Run `make xpra-images`, the complete `make live-test` (resuming failed cases
+   with `LIVE_FROM` and finishing with one complete run), and
+   `make xpra-installer-test`.
+4. Commit the pin only after all of them pass. If the new release fails,
+   keep the old pin and report the failing case with the release identity, as
+   described below.
 
 The project owns one automatic live topology. Preflight confirms that the two
 immutable images and rootless Podman are available; the full target streams
@@ -241,7 +279,7 @@ linger activation. Codec and GPU correctness remain the maintained
 fork's responsibility.
 
 Do not add internal Xpra source probes, downstream patch identifiers, or
-patch-specific regressions to this project. If the newest release fails inside
+patch-specific regressions to this project. If a candidate release fails inside
 Xpra, preserve its immutable release identity and the externally observed
 command/error, then hand those facts to the operator for investigation in the
 fork. The fork's own live matrices decide whether its current code and active

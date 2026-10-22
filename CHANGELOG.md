@@ -6,6 +6,21 @@ All notable changes to Elsewindow are documented here.
 
 ## Unreleased
 
+### Added
+
+- Let the standalone Xpra installer select a specific canonical fork release
+  with `--release NAME`, matching the release name or exact tag, for both
+  `install` and `resolve`. Without it the newest release is still installed.
+  A named release is bound to its exact release tag commit instead of current
+  `develop` ancestry, which older releases lose when the fork is rebased.
+
+### Changed
+
+- Pin the Xpra fork release used by image preparation, the live tests, and
+  installer acceptance in the root `XPRA_TEST_RELEASE` file (now
+  `7.0-r42751-1`), so a new fork release cannot break the gates before it is
+  validated. Users still get the newest release by default.
+
 ### Fixed
 
 - Submit the two Xpra environment locks together with the other six to the

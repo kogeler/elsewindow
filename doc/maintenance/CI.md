@@ -19,8 +19,8 @@ is `contents: read`.
 - exact version validation, progression for a new or unpublished version, and
   ordinary maintenance changes that retain an already published current
   version while `Unreleased` notes accumulate;
-- Debian 13 and Ubuntu 26.04 installer acceptance using only the newest
-  currently published maintained-fork package release and the job-scoped
+- Debian 13 and Ubuntu 26.04 installer acceptance using only the
+  maintained-fork package release pinned in `XPRA_TEST_RELEASE` and the job-scoped
   read token for rate-isolated API access inside its disposable guests;
 - one release-backed SSH/Xpra lifecycle gate using a clean-installed wheel.
 
