@@ -202,6 +202,17 @@ automation must decide from exact external publication state: an existing
 complete release for the current version skips reusable release CI and all
 publication jobs even as unreleased changes accumulate.
 
+Agents must never author, edit, or replace a pull-request body in this
+repository; the PR metadata workflow generates it from `CHANGELOG.md`
+`## Unreleased`. Create a pull request with an explicitly empty body
+(`gh pr create --title "..." --body ""`). Never pass body text, `--body-file`,
+`--fill`, `--fill-first`, `--fill-verbose`, `--template`, or `--editor`, and never
+change the body later through `gh pr edit`, the GitHub API, or the web UI. This
+includes summaries, validation notes, attribution lines, and edits to the
+marker-delimited section. Describe release-worthy changes only in
+`CHANGELOG.md` `## Unreleased`; report other details to the operator in the
+conversation.
+
 Every local gate reads the current filesystem bytes, including modified and
 untracked maintained files. Never select inputs from the Git index, require a
 commit, derive normalization from commit metadata, or persist a successful
