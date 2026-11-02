@@ -5,7 +5,8 @@ version: 2
 updates:
   # Native requirements inputs own direct versions and pip-compile owns their
   # generated locks. Keep the coordinated runtime dependency manual and group
-  # every other Python version update into one resolver change.
+  # every other Python version update into one resolver change. Security fixes
+  # get their own group so one pull request clears all of them together.
   - package-ecosystem: pip
     directories:
       - /
@@ -24,6 +25,10 @@ updates:
       python-dependencies:
         patterns:
           - "*"
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
@@ -35,5 +40,9 @@ updates:
     open-pull-requests-limit: 1
     groups:
       github-actions:
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
         patterns:
           - "*"

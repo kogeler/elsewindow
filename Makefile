@@ -414,7 +414,8 @@ lock-validate:
 	@$(SYSTEM_PYTHON) .github/scripts/lock_validation.py
 
 audit: quality-venv
-	@$(QUALITY_PYTHON) .github/scripts/dependency_audit.py
+	@$(QUALITY_PYTHON) .github/scripts/dependency_audit.py \
+		$(if $(AUDIT_BASELINE),--baseline-root '$(AUDIT_BASELINE)')
 
 audit-raw: quality-venv
 	@$(QUALITY_PYTHON) -m pip_audit --local --strict

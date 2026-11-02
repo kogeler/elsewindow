@@ -1,0 +1,32 @@
+# Copyright (c) 2026 kogeler. SPDX-License-Identifier: MIT.
+name: Dependency audit
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Scheduled exact-lock audit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.in
+            requirements-quality.in
+            requirements-quality.txt
+      - name: Enforce reviewed advisory exceptions
+        run: make audit SYSTEM_PYTHON=python

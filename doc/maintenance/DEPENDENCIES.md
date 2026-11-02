@@ -71,11 +71,16 @@ version changes. Both local resolver stages pin the `pip==26.1.1` and
 `pip-tools==7.5.3` pair used by Dependabot when this contract was established;
 a future resolver migration must update both stages together and reproduce all
 eight locks. GitHub Actions updates remain grouped into one other pull request,
-so one scheduled run opens at most one update per ecosystem.
+so one scheduled run opens at most one update per ecosystem. Security updates
+have their own group in each ecosystem, so one pull request clears every
+Dependabot-known advisory together. Advisories without a Dependabot alert still
+need a manual update of the affected lock.
 
 `make audit` checks every lock and accepts only exact findings in
 [`dependency-audit-exceptions.json`](../../.github/dependency-audit-exceptions.json);
-an unused exception fails as stale. `make licenses` inventories the complete
+an unused exception fails as stale. `make audit AUDIT_BASELINE=DIR` also reads
+the locks in a base tree and only reports findings already present there; CI
+uses it for pull requests and every other route stays strict. `make licenses` inventories the complete
 standalone build environment, a conservative superset of bundled Python
 packages; `make outdated` is an explicit online review aid. Maintainer locks
 are not a public installation interface: users install the published

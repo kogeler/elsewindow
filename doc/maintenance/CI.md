@@ -14,7 +14,10 @@ is `contents: read`.
   resources, console, and installed typing;
 - native one-file builds and smoke on the official `ubuntu-26.04` amd64 and
   `ubuntu-26.04-arm` arm64 runners;
-- exact-lock audit and same-repository pull-request dependency review;
+- exact-lock audit and same-repository pull-request dependency review; a pull
+  request fails the audit only on findings its base does not already have, so a
+  newly published advisory cannot block every pull request, including the
+  updates that fix it. `main` pushes and releases audit strictly;
 - Python and Actions CodeQL;
 - exact version validation, progression for a new or unpublished version, and
   ordinary maintenance changes that retain an already published current
@@ -57,6 +60,11 @@ that change documentation inputs. Its build
 job has read-only permissions and runs the same strict offline audit as
 `make check`. Only the direct-main deploy job receives `pages: write` and
 `id-token: write`; pull requests never upload or deploy a Pages artifact.
+
+[`dependency-audit.yml`](../../.github/workflows/dependency-audit.yml) runs the
+strict audit daily against the default branch, so a new advisory is reported
+without waiting for a push. A red scheduled run or `main` audit means the
+findings need a dependency update before the next release.
 
 ### Required status checks
 
