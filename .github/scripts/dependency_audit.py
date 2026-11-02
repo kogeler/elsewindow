@@ -124,10 +124,10 @@ def _allowed_findings(config: object) -> frozenset[Finding]:
     return frozenset(allowed)
 
 
-def _run_pip_audit() -> frozenset[Finding]:
+def _run_pip_audit(locks: tuple[Path, ...] = DEFAULT_LOCKS) -> frozenset[Finding]:
     """Strictly audit every complete hash-locked audience."""
     findings: set[Finding] = set()
-    for lock in DEFAULT_LOCKS:
+    for lock in locks:
         result = subprocess.run(
             [
                 sys.executable,
@@ -157,6 +157,20 @@ def _run_pip_audit() -> frozenset[Finding]:
     return frozenset(findings)
 
 
+def _baseline_findings(args: argparse.Namespace) -> frozenset[Finding]:
+    """Return findings the pull-request base already has, if one was given."""
+    if args.baseline_report is not None:
+        return _audit_findings(
+            _load_json(args.baseline_report, source="pip-audit baseline report")
+        )
+    if args.baseline_root is None:
+        return frozenset()
+    locks = tuple(
+        args.baseline_root / lock.relative_to(DEFAULT_ROOT) for lock in DEFAULT_LOCKS
+    )
+    return _run_pip_audit(tuple(lock for lock in locks if lock.is_file()))
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -165,6 +179,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--report",
         type=Path,
         help="read existing pip-audit JSON for deterministic tests",
+    )
+    parser.add_argument(
+        "--baseline-root",
+        type=Path,
+        help="pull-request base tree whose existing findings are only reported",
+    )
+    parser.add_argument(
+        "--baseline-report",
+        type=Path,
+        help="read baseline pip-audit JSON for deterministic tests",
     )
     return parser
 
@@ -177,8 +201,12 @@ def _run(args: argparse.Namespace) -> None:
         else _run_pip_audit()
     )
     allowed = _allowed_findings(_load_json(args.exceptions, source="exception config"))
-    unexpected = sorted(actual - allowed)
+    inherited = sorted((actual - allowed) & _baseline_findings(args))
+    unexpected = sorted(actual - allowed - set(inherited))
     stale = sorted(allowed - actual)
+    if inherited:
+        details = "\n".join(f"- {_format_finding(item)}" for item in inherited)
+        print(f"Findings inherited from the base, strict on main:\n{details}")
     if unexpected:
         details = "\n".join(f"- {_format_finding(item)}" for item in unexpected)
         raise AuditError(f"unexpected vulnerabilities:\n{details}")

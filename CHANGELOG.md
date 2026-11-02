@@ -16,6 +16,11 @@ All notable changes to Elsewindow are documented here.
 
 ### Changed
 
+- Fail the required pull-request vulnerability audit only on findings the pull
+  request adds. An advisory published against `main` used to block every pull
+  request, including the Dependabot updates that fixed it. `main` pushes,
+  releases, and a new daily scheduled audit stay strict, and Dependabot groups
+  security updates into one pull request.
 - Pin the Xpra fork release used by image preparation, the live tests, and
   installer acceptance in the root `XPRA_TEST_RELEASE` file (now
   `7.0-r42751-1`), so a new fork release cannot break the gates before it is
@@ -23,6 +28,12 @@ All notable changes to Elsewindow are documented here.
 
 ### Fixed
 
+- Update `filelock`, `msgpack`, and `setuptools` in the maintainer locks past
+  their published advisories.
+- Install Xpra 8.0 and later with the standalone installer. It required the
+  GTK CSS assets in `xpra-server`, and stopped before changing the system when
+  the release moved them to `xpra-common`. Required runtime files are now
+  checked across the whole selected DEB set instead of in one named package.
 - Run the documentation build on every pull request. It is a required check,
   and its path filter left pull requests that did not touch documentation
   inputs, including Dependabot updates, waiting forever for it. A unit test now

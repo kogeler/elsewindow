@@ -749,118 +749,122 @@ def test_extract_package_files_reverifies_bytes(tmp_path: Path) -> None:
     assert extracted[0].stat().st_mode & 0o777 == 0o600
 
 
-def test_verify_deb_metadata_uses_actual_control_fields(tmp_path: Path) -> None:
-    path = tmp_path / f"xpra_{VERSION}_amd64.deb"
-    write_private(path, b"deb")
-    record = releases.PackageRecord(
-        path.name, "xpra", VERSION, "amd64", 3, hashlib.sha256(b"deb").hexdigest()
-    )
-    archive = releases.PackageArchive("debian-13", VERSION, COMMIT, (record,), {})
-    values = {"Package": "xpra", "Version": VERSION, "Architecture": "amd64"}
+def required_runtime_files(distro: str = "debian-13") -> list[str]:
+    root = "usr/lib/python3/dist-packages/xpra"
+    extension = ".cpython-313-x86_64-linux-gnu.so"
+    files = [
+        "usr/bin/xpra",
+        f"{root}/client/base/client.py",
+        f"{root}/client/gtk3/opengl/client_window.py",
+        f"{root}/codecs/checks.py",
+        f"{root}/codecs/libva/__init__.py",
+        f"{root}/codecs/libva/encoder{extension}",
+        f"{root}/codecs/libva/decoder{extension}",
+        f"{root}/codecs/libyuv/converter{extension}",
+        f"{root}/codecs/video.py",
+        f"{root}/opengl/backing.py",
+        f"{root}/scripts/main.py",
+        f"{root}/server/core.py",
+        f"{root}/wayland/client/wait_for_display{extension}",
+        f"{root}/x11/bindings/core{extension}",
+    ]
+    if distro == "ubuntu-26.04":
+        files += [
+            f"{root}/wayland/server/display{extension}",
+            f"{root}/wayland/server/events{extension}",
+            f"{root}/wayland/server/compositor{extension}",
+            f"{root}/wayland/server/seamless.py",
+        ]
+    return files
+
+
+def deb_set(
+    tmp_path: Path, distro: str, contents: dict[str, list[str]]
+) -> tuple[
+    releases.PackageArchive,
+    tuple[Path, ...],
+    releases.CommandRunner,
+    dict[str, str],
+]:
+    """Build a fake DEB set; ``contents`` and the fields stay live for the runner."""
+    records = []
+    paths = []
+    for package in contents:
+        path = tmp_path / f"{package}_{VERSION}_amd64.deb"
+        write_private(path, b"deb")
+        digest = hashlib.sha256(b"deb").hexdigest()
+        records.append(
+            releases.PackageRecord(path.name, package, VERSION, "amd64", 3, digest)
+        )
+        paths.append(path)
+    archive = releases.PackageArchive(distro, VERSION, COMMIT, tuple(records), {})
+    fields = {"Version": VERSION, "Architecture": "amd64"}
 
     def runner(arguments: releases.Sequence[str]) -> subprocess.CompletedProcess[str]:
         assert arguments[0] == releases.DPKG_DEB
-        if arguments[1] == "--contents":
-            return command_result(
-                tuple(arguments),
-                stdout=(
-                    "-rw-r--r-- root/root 1 2026-08-30 00:00 "
-                    "./usr/share/doc/xpra/copyright\n"
-                ),
-            )
-        assert arguments[1] == "--field"
-        return command_result(tuple(arguments), stdout=f"{values[arguments[-1]]}\n")
+        package = Path(arguments[2]).name.partition("_")[0]
+        if arguments[1] == "--field":
+            value = package if arguments[-1] == "Package" else fields[arguments[-1]]
+            return command_result(tuple(arguments), stdout=f"{value}\n")
+        assert arguments[1] == "--contents"
+        output = "".join(
+            f"lrwxrwxrwx root/root 0 2026-08-30 00:00 ./{member} -> /tmp/target\n"
+            if member.endswith("#symlink")
+            else f"-rw-r--r-- root/root 1 2026-08-30 00:00 ./{member}\n"
+            for member in contents[package]
+        )
+        return command_result(tuple(arguments), stdout=output.replace("#symlink", ""))
 
-    releases.verify_deb_metadata(archive, (path,), runner=runner)
+    return archive, tuple(paths), runner, fields
 
-    values["Version"] = "wrong"
+
+def test_verify_deb_metadata_uses_actual_control_fields(tmp_path: Path) -> None:
+    archive, paths, runner, fields = deb_set(
+        tmp_path, "debian-13", {"xpra-common": required_runtime_files()}
+    )
+
+    releases.verify_deb_metadata(archive, paths, runner=runner)
+
+    fields["Version"] = "wrong"
     with pytest.raises(releases.ReleaseError, match="version differs"):
-        releases.verify_deb_metadata(archive, (path,), runner=runner)
+        releases.verify_deb_metadata(archive, paths, runner=runner)
 
 
-def test_verify_deb_metadata_requires_actual_native_codec_members(
+def test_verify_deb_metadata_requires_regular_unique_runtime_files(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / f"xpra-codecs_{VERSION}_amd64.deb"
-    write_private(path, b"deb")
-    record = releases.PackageRecord(
-        path.name,
-        "xpra-codecs",
-        VERSION,
-        "amd64",
-        3,
-        hashlib.sha256(b"deb").hexdigest(),
+    members = required_runtime_files()
+    archive, paths, runner, _fields = deb_set(
+        tmp_path, "debian-13", {"xpra-codecs": members}
     )
-    archive = releases.PackageArchive("debian-13", VERSION, COMMIT, (record,), {})
-    fields = {
-        "Package": "xpra-codecs",
-        "Version": VERSION,
-        "Architecture": "amd64",
-    }
-    members = [
-        "usr/lib/python3/dist-packages/xpra/codecs/libva/__init__.py",
-        (
-            "usr/lib/python3/dist-packages/xpra/codecs/libva/"
-            "encoder.cpython-313-x86_64-linux-gnu.so"
-        ),
-        (
-            "usr/lib/python3/dist-packages/xpra/codecs/libva/"
-            "decoder.cpython-313-x86_64-linux-gnu.so"
-        ),
-        (
-            "usr/lib/python3/dist-packages/xpra/codecs/libyuv/"
-            "converter.cpython-313-x86_64-linux-gnu.so"
-        ),
-    ]
+    decoder = next(member for member in members if "/libva/decoder" in member)
+    decoder_index = members.index(decoder)
 
-    def runner(arguments: releases.Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if arguments[1] == "--field":
-            return command_result(
-                tuple(arguments),
-                stdout=f"{fields[arguments[-1]]}\n",
-            )
-        assert arguments[1] == "--contents"
-        output = "".join(
-            f"-rw-r--r-- root/root 1 2026-08-30 00:00 ./{member}\n"
-            for member in members
-        )
-        return command_result(tuple(arguments), stdout=output)
-
-    releases.verify_deb_metadata(archive, (path,), runner=runner)
-
-    decoder = members[2]
-    members[2] = f"SYMLINK {decoder}"
-
-    def symlink_runner(
-        arguments: releases.Sequence[str],
-    ) -> subprocess.CompletedProcess[str]:
-        if arguments[1] == "--field":
-            return command_result(
-                tuple(arguments),
-                stdout=f"{fields[arguments[-1]]}\n",
-            )
-        assert arguments[1] == "--contents"
-        output = "".join(
-            (
-                f"lrwxrwxrwx root/root 0 2026-08-30 00:00 "
-                f"./{member.removeprefix('SYMLINK ')} -> /tmp/decoder.so\n"
-                if member.startswith("SYMLINK ")
-                else f"-rw-r--r-- root/root 1 2026-08-30 00:00 ./{member}\n"
-            )
-            for member in members
-        )
-        return command_result(tuple(arguments), stdout=output)
-
+    members[decoder_index] = f"{decoder}#symlink"
     with pytest.raises(releases.ReleaseError, match="required runtime file"):
-        releases.verify_deb_metadata(archive, (path,), runner=symlink_runner)
+        releases.verify_deb_metadata(archive, paths, runner=runner)
 
-    members[2] = decoder
-    members.append(
-        "usr/lib/python3/dist-packages/xpra/codecs/libva/"
-        "encoder.cpython-314-x86_64-linux-gnu.so"
-    )
+    members[decoder_index] = decoder
+    members.append(decoder.replace("cpython-313", "cpython-314"))
     with pytest.raises(releases.ReleaseError, match="required runtime file"):
-        releases.verify_deb_metadata(archive, (path,), runner=runner)
+        releases.verify_deb_metadata(archive, paths, runner=runner)
+
+
+def test_verify_deb_metadata_accepts_runtime_files_in_any_selected_package(
+    tmp_path: Path,
+) -> None:
+    members = required_runtime_files()
+    contents = {"xpra-common": members[:1], "xpra-server": members[1:]}
+
+    archive, paths, runner, _fields = deb_set(tmp_path, "debian-13", contents)
+    releases.verify_deb_metadata(archive, paths, runner=runner)
+
+    contents["xpra-common"], contents["xpra-server"] = members[1:], members[:1]
+    releases.verify_deb_metadata(archive, paths, runner=runner)
+
+    contents["xpra-server"] = members[:2]
+    with pytest.raises(releases.ReleaseError, match="required runtime file"):
+        releases.verify_deb_metadata(archive, paths, runner=runner)
 
 
 def test_deb_content_listing_rejects_unsafe_or_duplicate_paths(tmp_path: Path) -> None:
@@ -885,43 +889,17 @@ def test_deb_content_listing_rejects_unsafe_or_duplicate_paths(tmp_path: Path) -
 def test_verify_deb_metadata_requires_wayland_server_only_in_ubuntu(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / f"xpra-server-wayland_{VERSION}_amd64.deb"
-    write_private(path, b"deb")
-    record = releases.PackageRecord(
-        path.name,
-        "xpra-server-wayland",
-        VERSION,
-        "amd64",
-        3,
-        hashlib.sha256(b"deb").hexdigest(),
-    )
-    fields = {
-        "Package": "xpra-server-wayland",
-        "Version": VERSION,
-        "Architecture": "amd64",
-    }
+    contents = {"xpra-server": required_runtime_files()}
 
-    def runner(arguments: releases.Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if arguments[1] == "--field":
-            return command_result(
-                tuple(arguments),
-                stdout=f"{fields[arguments[-1]]}\n",
-            )
-        assert arguments[1] == "--contents"
-        return command_result(
-            tuple(arguments),
-            stdout=(
-                "-rw-r--r-- root/root 1 2026-08-30 00:00 "
-                "./usr/share/doc/xpra-server-wayland/copyright\n"
-            ),
-        )
+    debian, paths, runner, _fields = deb_set(tmp_path, "debian-13", contents)
+    releases.verify_deb_metadata(debian, paths, runner=runner)
 
-    debian = releases.PackageArchive("debian-13", VERSION, COMMIT, (record,), {})
-    releases.verify_deb_metadata(debian, (path,), runner=runner)
-
-    ubuntu = releases.PackageArchive("ubuntu-26.04", VERSION, COMMIT, (record,), {})
+    ubuntu, paths, runner, _fields = deb_set(tmp_path, "ubuntu-26.04", contents)
     with pytest.raises(releases.ReleaseError, match="required runtime file"):
-        releases.verify_deb_metadata(ubuntu, (path,), runner=runner)
+        releases.verify_deb_metadata(ubuntu, paths, runner=runner)
+
+    contents["xpra-server"] = required_runtime_files("ubuntu-26.04")
+    releases.verify_deb_metadata(ubuntu, paths, runner=runner)
 
 
 def test_xpra_inventory_uses_namespace_and_source_metadata() -> None:

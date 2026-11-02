@@ -50,6 +50,7 @@ def _input_requirements(path: Path, *, extends_runtime: bool) -> dict[str, str]:
 def test_governance_files_are_project_local_and_complete() -> None:
     assert {path.name for path in WORKFLOWS.glob("*.yml")} == {
         "ci.yml",
+        "dependency-audit.yml",
         "dependency-submission.yml",
         "pages.yml",
         "pr-body.yml",
@@ -369,7 +370,8 @@ def test_dependabot_groups_ecosystems_and_keeps_runtime_manual() -> None:
 
     assert dependabot.count("package-ecosystem:") == 2
     assert dependabot.count("open-pull-requests-limit: 1") == 2
-    assert dependabot.count('          - "*"') == 2
+    assert dependabot.count('          - "*"') == 4
+    assert dependabot.count("applies-to: security-updates") == 2
     assert 'dependency-name: "ssh-wrapper"' in dependabot
     assert "exclude-paths:\n      - pyproject.toml" in dependabot
     assert "python-dependencies:" in dependabot
@@ -380,6 +382,26 @@ def test_dependabot_groups_ecosystems_and_keeps_runtime_manual() -> None:
     )
     assert governance.count("pip==26.1.1") == 2
     assert governance.count("pip-tools==7.5.3") == 2
+
+
+def test_only_pull_requests_compare_the_audit_with_their_base() -> None:
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    audit_job = ci.split("\n  audit:", 1)[1].split("\n  # Ordinary changes", 1)[0]
+
+    assert "if: github.event_name == 'pull_request'" in audit_job
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in audit_job
+    assert (
+        "${{ github.event_name == 'pull_request' && 'AUDIT_BASELINE=.audit-base' "
+        "|| '' }}" in audit_job
+    )
+    release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    assert _trigger_block(release, "pull_request") is None
+
+    scheduled = (WORKFLOWS / "dependency-audit.yml").read_text(encoding="utf-8")
+    assert "schedule:" in scheduled
+    assert "run: make audit SYSTEM_PYTHON=python\n" in scheduled
+    assert "AUDIT_BASELINE" not in scheduled
+    assert _trigger_block(scheduled, "pull_request") is None
 
 
 def test_audit_starts_with_no_reviewed_exceptions() -> None:
