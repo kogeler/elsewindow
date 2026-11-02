@@ -112,8 +112,9 @@ the local-DEB APT transaction, rechecks the inventory, purges only that set,
 and installs through APT.
 
 Capability validation requires the native libva encoder and decoder, libyuv,
-GTK OpenGL, common/server assets, X11 bindings, and Ubuntu Wayland modules in
-their owning packages. APT explicitly requests `libva-drm2`,
+GTK OpenGL, common/server modules, X11 bindings, and Ubuntu Wayland modules
+exactly once across the selected DEB set, not in one named package, so a release
+can move a file between selected packages. APT explicitly requests `libva-drm2`,
 `python3-opengl`, `python3-venv`, `dbus-daemon`, `python3-dbus`, `python3-gi`,
 `xdg-desktop-portal`, and `xdg-desktop-portal-gtk`;
 post-install verification imports every

@@ -215,8 +215,20 @@ jobs:
             requirements.in
             requirements-quality.in
             requirements-quality.txt
+      - name: Check out pull-request base locks
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .audit-base
+          persist-credentials: false
+      # An advisory published against main must not block every pull request,
+      # including the updates that fix it. Pull requests fail only on findings
+      # they add; main, releases, and the scheduled audit stay strict.
       - name: Enforce reviewed advisory exceptions
-        run: make audit SYSTEM_PYTHON=python
+        run: >-
+          make audit SYSTEM_PYTHON=python
+          ${{ github.event_name == 'pull_request' && 'AUDIT_BASELINE=.audit-base' || '' }}
 
   # Ordinary changes may retain a published version while Unreleased accumulates.
   # An unpublished current version still has to advance beyond published history.

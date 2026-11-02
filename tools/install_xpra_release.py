@@ -136,56 +136,34 @@ REQUIRED_APT_PACKAGES: Final = (
 )
 PYTHON_PACKAGE_ROOT: Final = "usr/lib/python3/dist-packages/xpra"
 CPYTHON_EXTENSION: Final = r"\.cpython-[0-9]+-x86_64-linux-gnu\.so"
-COMMON_PACKAGE_CONTENT: Final = {
-    "xpra-client": (re.compile(rf"{PYTHON_PACKAGE_ROOT}/client/base/client\.py"),),
-    "xpra-client-gtk3": (
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/client/gtk3/opengl/client_window\.py"),
+COMMON_RUNTIME_FILES: Final = (
+    re.compile(r"usr/bin/xpra"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/client/base/client\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/client/gtk3/opengl/client_window\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/checks\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/__init__\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/encoder{CPYTHON_EXTENSION}"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/decoder{CPYTHON_EXTENSION}"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libyuv/converter{CPYTHON_EXTENSION}"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/video\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/opengl/backing\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/scripts/main\.py"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/server/core\.py"),
+    re.compile(
+        rf"{PYTHON_PACKAGE_ROOT}/wayland/client/wait_for_display{CPYTHON_EXTENSION}"
     ),
-    "xpra-codecs": (
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/__init__\.py"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/encoder{CPYTHON_EXTENSION}"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/libva/decoder{CPYTHON_EXTENSION}"),
+    re.compile(rf"{PYTHON_PACKAGE_ROOT}/x11/bindings/core{CPYTHON_EXTENSION}"),
+)
+DISTRO_RUNTIME_FILES: Final = {
+    "ubuntu-26.04": (
+        re.compile(rf"{PYTHON_PACKAGE_ROOT}/wayland/server/display{CPYTHON_EXTENSION}"),
+        re.compile(rf"{PYTHON_PACKAGE_ROOT}/wayland/server/events{CPYTHON_EXTENSION}"),
         re.compile(
-            rf"{PYTHON_PACKAGE_ROOT}/codecs/libyuv/converter{CPYTHON_EXTENSION}"
+            rf"{PYTHON_PACKAGE_ROOT}/wayland/server/compositor{CPYTHON_EXTENSION}"
         ),
+        re.compile(rf"{PYTHON_PACKAGE_ROOT}/wayland/server/seamless\.py"),
     ),
-    "xpra-common": (
-        re.compile(r"usr/bin/xpra"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/checks\.py"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/codecs/video\.py"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/opengl/backing\.py"),
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/scripts/main\.py"),
-    ),
-    "xpra-server": (
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/server/core\.py"),
-        re.compile(r"usr/share/xpra/css/10_header_bar\.css"),
-    ),
-    "xpra-wayland": (
-        re.compile(
-            rf"{PYTHON_PACKAGE_ROOT}/wayland/client/wait_for_display"
-            rf"{CPYTHON_EXTENSION}"
-        ),
-    ),
-    "xpra-x11": (
-        re.compile(rf"{PYTHON_PACKAGE_ROOT}/x11/bindings/core{CPYTHON_EXTENSION}"),
-    ),
-}
-DISTRO_PACKAGE_CONTENT: Final = {
-    "ubuntu-26.04": {
-        "xpra-server-wayland": (
-            re.compile(
-                rf"{PYTHON_PACKAGE_ROOT}/wayland/server/display{CPYTHON_EXTENSION}"
-            ),
-            re.compile(
-                rf"{PYTHON_PACKAGE_ROOT}/wayland/server/events{CPYTHON_EXTENSION}"
-            ),
-            re.compile(
-                rf"{PYTHON_PACKAGE_ROOT}/wayland/server/compositor{CPYTHON_EXTENSION}"
-            ),
-            re.compile(rf"{PYTHON_PACKAGE_ROOT}/wayland/server/seamless\.py"),
-        ),
-    },
-    "debian-13": {},
+    "debian-13": (),
 }
 COMMON_RUNTIME_IMPORTS: Final = (
     "OpenGL",
@@ -1311,19 +1289,11 @@ def _deb_regular_files(path: Path, runner: CommandRunner) -> frozenset[str]:
     return frozenset(files)
 
 
-def _required_package_content(
-    distro: str,
-) -> dict[str, tuple[re.Pattern[str], ...]]:
+def _required_runtime_files(distro: str) -> tuple[re.Pattern[str], ...]:
     try:
-        distro_requirements = DISTRO_PACKAGE_CONTENT[distro]
+        return (*COMMON_RUNTIME_FILES, *DISTRO_RUNTIME_FILES[distro])
     except KeyError as error:
         raise ReleaseError("package content distribution is unsupported") from error
-    requirements = dict(COMMON_PACKAGE_CONTENT)
-    for package, patterns in distro_requirements.items():
-        requirements[package] = (*requirements.get(package, ()), *patterns)
-    if not set(requirements).issubset(REQUIRED_XPRA_PACKAGES):
-        raise RuntimeError("package content requirements exceed the selected DEB set")
-    return requirements
 
 
 def verify_deb_metadata(
@@ -1332,11 +1302,12 @@ def verify_deb_metadata(
     *,
     runner: CommandRunner = run_command,
 ) -> None:
-    """Bind DEB controls and required runtime files to the validated manifest."""
+    """Bind DEB controls and the set's runtime files to the validated manifest."""
     by_filename = {path.name: path for path in paths}
     if set(by_filename) != {record.filename for record in archive.packages}:
         raise ReleaseError("extracted DEB set differs from the manifest")
-    requirements = _required_package_content(archive.distro)
+    requirements = _required_runtime_files(archive.distro)
+    files: list[str] = []
     for record in archive.packages:
         path = by_filename[record.filename]
         if _deb_field(path, "Package", runner) != record.package:
@@ -1345,16 +1316,14 @@ def verify_deb_metadata(
             raise ReleaseError(f"DEB package version differs: {record.filename}")
         if _deb_field(path, "Architecture", runner) != record.architecture:
             raise ReleaseError(f"DEB package architecture differs: {record.filename}")
-        files = _deb_regular_files(path, runner)
-        patterns = requirements.get(record.package, ())
-        for pattern in patterns:
-            matches = tuple(name for name in files if pattern.fullmatch(name))
-            if len(matches) != 1:
-                raise ReleaseError(
-                    "DEB package lacks one exact required runtime file: "
-                    f"package={record.package}, pattern={pattern.pattern!r}, "
-                    f"matches={list(matches)}"
-                )
+        files.extend(_deb_regular_files(path, runner))
+    for pattern in requirements:
+        matches = tuple(name for name in files if pattern.fullmatch(name))
+        if len(matches) != 1:
+            raise ReleaseError(
+                "DEB set lacks one exact required runtime file: "
+                f"pattern={pattern.pattern!r}, matches={list(matches)}"
+            )
 
 
 def _root_stage_path(value: str, parent: Path) -> Path:
