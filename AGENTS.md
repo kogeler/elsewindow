@@ -138,11 +138,12 @@ application's source tree.
   a root-owned mode-`0700` stage, revalidates immutable copies and inventory,
   and purges only the confirmed set immediately before the APT transaction.
 - Package selection is the symmetric consumed dependency closure. Validate the
-  native libva encoder and decoder, libyuv, GTK OpenGL, common/server assets,
-  X11 bindings, and Ubuntu Wayland modules in their owning DEBs. Install exact
-  local DEBs with `libva-drm2`, `python3-opengl`, `python3-venv`, `dbus-daemon`,
-  `python3-dbus`, `python3-gi`, `xdg-desktop-portal`, and
-  `xdg-desktop-portal-gtk` through APT. Never use
+  native libva encoder and decoder, libyuv, GTK OpenGL, common/server modules,
+  X11 bindings, and Ubuntu Wayland modules exactly once across that selected
+  DEB set, never in one named package, so a release may move a file between
+  selected packages. Install exact local DEBs with `libva-drm2`,
+  `python3-opengl`, `python3-venv`, `dbus-daemon`, `python3-dbus`, `python3-gi`,
+  `xdg-desktop-portal`, and `xdg-desktop-portal-gtk` through APT. Never use
   `dpkg -i`, `autoremove`, or an added Xpra APT source.
 - Every project-owned Podman transfer uses the bounded payload pipe. Do not add
   bind mounts, named data volumes, or `podman cp`.
@@ -206,6 +207,11 @@ check, so never add `paths`, `paths-ignore`, `branches`, or `branches-ignore`
 filters to a `pull_request` trigger; a filtered required check never reports
 and blocks the pull request indefinitely. Keep required job names stable and
 update the `main` ruleset in the same change when renaming one.
+
+The required exact-lock audit rejects on a pull request only findings absent
+from its base commit, because an advisory published against `main` would
+otherwise block every pull request, including the updates that fix it. `main`
+pushes, releases, and the scheduled `dependency-audit.yml` stay strict.
 
 The privileged PR metadata workflow executes only trusted default-branch code.
 Treat the pull-request head `CHANGELOG.md` as bounded inert data and replace
