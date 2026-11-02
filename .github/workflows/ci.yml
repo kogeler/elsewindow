@@ -374,3 +374,33 @@ jobs:
             requirements.txt
       - name: Run the packaged-product lifecycle matrix
         run: make live-test SYSTEM_PYTHON=python
+
+  # The only job the main ruleset requires: every new job joins this list.
+  # always() keeps a failed dependency from skipping the gate, because GitHub
+  # treats a skipped required check as passed.
+  gate:
+    name: CI gate
+    if: always()
+    needs:
+      - quality
+      - compatibility
+      - distributions
+      - standalone
+      - dependency-review
+      - audit
+      - version
+      - codeql
+      - installer
+      - live
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        # Dependency review runs only for same-repository pull requests.
+        run: |
+          jq --exit-status 'to_entries | map(select(
+            .value.result != "success" and
+            (.key != "dependency-review" or .value.result != "skipped")
+          )) | if . == [] then true else (map("\(.key): \(.value.result)") | .[] | debug) | false end' <<<"$RESULTS"
