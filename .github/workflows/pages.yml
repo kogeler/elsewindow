@@ -3,9 +3,8 @@
 name: Documentation
 
 on:
-  # "Render and audit site" is a required status check, so every pull request
-  # must report it: never add paths/branches filters to this trigger.
-  pull_request:
+  # Pull requests get the same strict documentation audit from `make check` in
+  # the CI quality job, so only the deployment path runs here.
   push:
     branches:
       - main
