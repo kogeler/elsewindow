@@ -18,6 +18,9 @@ All notable changes to Elsewindow are documented here.
 
 ### Changed
 
+- Require one `CI gate` status check that depends on every other CI job, and
+  run the documentation workflow only for deployment because the CI quality job
+  already audits documentation on pull requests.
 - Fail the required pull-request vulnerability audit only on findings the pull
   request adds. An advisory published against `main` used to block every pull
   request, including the Dependabot updates that fixed it. `main` pushes,

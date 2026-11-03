@@ -214,8 +214,30 @@ def test_pull_request_checks_always_report() -> None:
 
     assert filtered == {}
     pages = (WORKFLOWS / "pages.yml").read_text(encoding="utf-8")
-    assert _trigger_block(pages, "pull_request") is not None
+    assert _trigger_block(pages, "pull_request") is None
     assert "name: Render and audit site" in pages
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    check = re.search(r"^check:(.*(?:\\\n.*)*)", makefile, re.MULTILINE)
+    assert check is not None
+    assert "docs-audit" in check[1]
+
+
+def test_ci_gate_depends_on_every_other_job() -> None:
+    ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    jobs = ci.split("\njobs:\n", 1)[1]
+    names = re.findall(r"^  ([a-z][a-z0-9-]*):$", jobs, re.MULTILINE)
+    gate = jobs.split("\n  gate:\n", 1)[1]
+    needs = re.findall(
+        r"^      - ([a-z][a-z0-9-]*)$",
+        gate.split("    needs:\n", 1)[1].split("    runs-on:", 1)[0],
+        re.MULTILINE,
+    )
+
+    assert names[-1] == "gate"
+    assert needs == names[:-1]
+    assert "    name: CI gate\n" in gate
+    assert "    if: always()\n" in gate
+    assert '.key != "dependency-review"' in gate
 
 
 def test_make_exposes_the_complete_governance_surface() -> None:
