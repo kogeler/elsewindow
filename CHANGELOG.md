@@ -25,7 +25,7 @@ All notable changes to Elsewindow are documented here.
   security updates into one pull request.
 - Pin the Xpra fork release used by image preparation, the live tests, and
   installer acceptance in the root `XPRA_TEST_RELEASE` file (now
-  `8.0-r43272-2`), so a new fork release cannot break the gates before it is
+  `8.0-r43272-3`), so a new fork release cannot break the gates before it is
   validated. Users still get the newest release by default.
 
 ### Fixed
