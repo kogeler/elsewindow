@@ -673,13 +673,23 @@ class XpraSession:
             for line in stdout.decode("utf-8", errors="replace").splitlines():
                 key, separator, value = line.partition("=")
                 if separator:
-                    properties[key.strip()] = value.strip().lower()
+                    properties[key.strip()] = value.strip()
             if (
                 opengl_status != 0
-                or properties.get("success") != "true"
-                or properties.get("safe") != "true"
+                or properties.get("success", "").lower() != "true"
+                or properties.get("safe", "").lower() != "true"
             ):
-                self._disable_video("local", "the public Xpra OpenGL check failed")
+                reason = "the public Xpra OpenGL check failed"
+                diagnostic = properties.get("error") or properties.get("message", "")
+                diagnostic = " ".join(
+                    "".join(
+                        character if character.isprintable() else " "
+                        for character in diagnostic
+                    ).split()
+                )[:256]
+                if diagnostic:
+                    reason += f": {diagnostic}"
+                self._disable_video("local", reason)
 
     def _disable_video(self, side: str, reason: str) -> None:
         self.client_encoding_profile = DEFAULT_ENCODING_PROFILE

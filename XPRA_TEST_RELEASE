@@ -8,4 +8,4 @@
 #
 # Move the pin only after the new release passes the complete live matrix; see
 # doc/development.md#pinned-xpra-test-release.
-7.0-r42751-1
+8.0-r43272-3

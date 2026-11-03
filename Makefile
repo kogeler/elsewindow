@@ -91,7 +91,7 @@ BOX_CONFINE := --rm --interactive --network=none --userns=auto:size=2048 \
 BOX_ONLINE = $(subst --network=none,--network=slirp4netns,$(BOX_CONFINE))
 LOCK_ONLINE = $(subst size=512m,size=4g,$(BOX_ONLINE))
 
-.PHONY: help runtime-venv runtime-python-venv xpra-venv quality-venv test-venv package-venv standalone-venv \
+.PHONY: help runtime-venv runtime-python-venv xpra-venv xpra-opengl-check quality-venv test-venv package-venv standalone-venv \
 	docs-venv docs-build docs-audit docs-serve \
 	dev-venv dependency-wheels package build standalone smoke-wheel smoke-sdist \
 	smoke-standalone smoke reproducibility checksums lock \
@@ -108,6 +108,7 @@ help:
 	@printf '%s\n' \
 		'make runtime-venv       Prepare Elsewindow and isolated local Xpra environments' \
 		'make xpra-venv          Prepare only the local Xpra additions' \
+		'make xpra-opengl-check  Diagnose local OpenGL using the owned Xpra environment' \
 		'make package            Build and validate the wheel and source archive' \
 		'make standalone         Build and validate this host architecture binary' \
 		'make smoke              Clean-smoke Python artifacts and native binary' \
@@ -129,6 +130,9 @@ runtime-venv: runtime-python-venv xpra-venv
 xpra-venv: runtime-python-venv
 	@PYTHONPATH='$(CURDIR)' ELSEWINDOW_XPRA_VENV='$(CURDIR)/$(XPRA_VENV)' \
 		$(RUNTIME_PYTHON) -m elsewindow --prepare-xpra
+
+xpra-opengl-check: runtime-venv
+	@'$(XPRA_VENV)/bin/xpra' opengl
 
 runtime-python-venv:
 	@if [[ ! -x '$(RUNTIME_PYTHON)' ]] || [[ ! -f '$(RUNTIME_STATE)' ]] || \

@@ -40,6 +40,16 @@ a working graphical session. The `h264` profile
 additionally requires a usable DRM render node and a hardware-specific VA-API
 driver on both systems.
 
+If a requested H.264 connection falls back to RGB, run `make xpra-opengl-check`
+from the local graphical session. This runs the public Xpra OpenGL check with
+the same isolated Python environment used by the client and prints its full
+result, including `success`, `safe`, and any failure message. Preparing that
+environment does not install system packages. The fallback warning also includes
+the public check's `error` or `message` field when available. A failed check can
+indicate an Xpra regression even when OpenGL and the driver are installed;
+the maintained fork owns fixes to the check itself. RGB fallback can increase
+bandwidth use and reduce responsiveness.
+
 This repository consumes checksum-bound DEB archives published by
 `kogeler/xpra`. `tools/install_xpra_release.py` can install the newest owned
 release, or a named one with `--release NAME`, on Debian 13 or Ubuntu 26.04; see

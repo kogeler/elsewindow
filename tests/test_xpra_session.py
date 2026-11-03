@@ -669,6 +669,43 @@ async def test_native_video_local_opengl_failure_falls_back_without_changing_ser
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("error", "message"))
+async def test_opengl_fallback_reports_the_public_failure_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    field: str,
+) -> None:
+    session = XpraSession(
+        replace(_config(tmp_path), encoding_profile=_native_video_profile())
+    )
+    diagnostic = (
+        "'FakeWindowSubsystem' object has no attribute 'video_decoders_changed'"
+    )
+    responses = iter(
+        (
+            (0, " ".join(session._local_required_options()).encode(), b""),
+            (
+                0,
+                f"{field}={diagnostic}\nsuccess=False\nsafe=False\n".encode(),
+                b"private diagnostic",
+            ),
+        )
+    )
+
+    async def local(_argv: list[str], _timeout: float) -> tuple[int, bytes, bytes]:
+        return next(responses)
+
+    monkeypatch.setattr(session, "_run_local", local)
+    await session._check_local_capabilities()
+
+    assert session.client_encoding_profile == DEFAULT_ENCODING_PROFILE
+    warning = capsys.readouterr().err
+    assert f"the public Xpra OpenGL check failed: {diagnostic}" in warning
+    assert "private diagnostic" not in warning
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("side", ("client", "server"))
 @pytest.mark.parametrize(
     "response", (b'{"notifications": false, "render": false}', b"{}", b"not-json")
