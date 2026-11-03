@@ -8,6 +8,8 @@ All notable changes to Elsewindow are documented here.
 
 ### Added
 
+- Add `make xpra-opengl-check` to show the public OpenGL check's complete result
+  from the same isolated environment used by the local client.
 - Let the standalone Xpra installer select a specific canonical fork release
   with `--release NAME`, matching the release name or exact tag, for both
   `install` and `resolve`. Without it the newest release is still installed.
@@ -23,11 +25,13 @@ All notable changes to Elsewindow are documented here.
   security updates into one pull request.
 - Pin the Xpra fork release used by image preparation, the live tests, and
   installer acceptance in the root `XPRA_TEST_RELEASE` file (now
-  `7.0-r42751-1`), so a new fork release cannot break the gates before it is
+  `8.0-r43272-2`), so a new fork release cannot break the gates before it is
   validated. Users still get the newest release by default.
 
 ### Fixed
 
+- Include the public Xpra OpenGL failure reason in the H.264 fallback warning,
+  so an Xpra check regression is visible instead of only package setup advice.
 - Update `filelock`, `msgpack`, and `setuptools` in the maintainer locks past
   their published advisories.
 - Install Xpra 8.0 and later with the standalone installer. It required the
