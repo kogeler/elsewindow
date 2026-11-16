@@ -1,4 +1,4 @@
 # The documentation environment extends the published runtime.
 -r requirements.in
 
-mkdocs-material==9.8.0
+mkdocs-material==9.8.1
